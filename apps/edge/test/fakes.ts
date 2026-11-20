@@ -70,6 +70,11 @@ export class FakeKV {
   async delete(key: string) {
     this.map.delete(key)
   }
+  async list(opts: { prefix?: string; limit?: number }) {
+    const keys = [...this.map.keys()].filter((k) => k.startsWith(opts.prefix ?? '')).sort()
+    const limit = opts.limit ?? 1000
+    return { keys: keys.slice(0, limit).map((name) => ({ name })), list_complete: keys.length <= limit, cursor: undefined }
+  }
 }
 
 export class FakeR2 {

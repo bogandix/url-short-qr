@@ -182,6 +182,17 @@ describe('logging guarantee', () => {
     expect(db.clicks.size).toBe(1)
   })
 
+  it('without an R2 binding the outage buffer is KV, and replay drains it', async () => {
+    const { env, kv } = makeEnv(domains, links, { FALLBACK: undefined })
+    db.down = true
+    expect((await handleRequest(req('https://short.example/A7K2'), env, ctx, api)).status).toBe(302)
+    const pending = [...kv.map.keys()].filter((k) => k.startsWith('pending/'))
+    expect(pending).toHaveLength(1)
+    db.down = false
+    expect(await replayPending(env)).toMatchObject({ read: 1, inserted: 1, deleted: 1 })
+    expect([...kv.map.keys()].some((k) => k.startsWith('pending/'))).toBe(false)
+  })
+
   it('STRICT_LOGGING=true with both stores down → 503', async () => {
     const { env, r2 } = makeEnv(domains, links, { STRICT_LOGGING: 'true' })
     db.down = true

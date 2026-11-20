@@ -27,7 +27,7 @@ export function Login() {
   return (
     <main class="login">
       <h1>Shortener</h1>
-      {cfg.data?.provider === 'supabase' && (
+      {(cfg.data?.provider === 'supabase' || cfg.data?.provider === 'password') && (
         <Card title="Sign in">
           <form onSubmit={run(() => passwordLogin(email.trim(), pw))}>
             <label>Email<input type="email" required autoComplete="username" value={email} onInput={(e) => setEmail(e.currentTarget.value)} autoFocus /></label>
@@ -70,6 +70,7 @@ export function Login() {
 
 // ───────────── Temporary password → new password ─────────────
 export function ChangePassword() {
+  const [cur, setCur] = useState('')
   const [a, setA] = useState('')
   const [b, setB] = useState('')
   const [err, setErr] = useState<Error>()
@@ -81,7 +82,7 @@ export function ChangePassword() {
     if (a !== b) return setErr(new Error('Passwords do not match'))
     setBusy(true)
     try {
-      await changePassword(a)
+      await changePassword(cur, a)
     } catch (x) {
       setErr(x as Error)
     } finally {
@@ -93,7 +94,8 @@ export function ChangePassword() {
       <h1>Choose a new password</h1>
       <Card title="You signed in with a temporary password">
         <form onSubmit={submit}>
-          <label>New password (12+ characters)<input type="password" autoComplete="new-password" required value={a} onInput={(e) => setA(e.currentTarget.value)} autoFocus /></label>
+          <label>Temporary (current) password<input type="password" autoComplete="current-password" required value={cur} onInput={(e) => setCur(e.currentTarget.value)} autoFocus /></label>
+          <label>New password (12+ characters)<input type="password" autoComplete="new-password" required value={a} onInput={(e) => setA(e.currentTarget.value)} /></label>
           <label>Repeat<input type="password" autoComplete="new-password" required value={b} onInput={(e) => setB(e.currentTarget.value)} /></label>
           <button disabled={busy || weak}>Save password</button>
         </form>

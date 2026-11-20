@@ -24,6 +24,7 @@ vi.mock('postgres', async () => {
 })
 import { api } from '../apps/edge/src/api/index.js'
 import { clearAuthCaches, sha256Hex } from '../apps/edge/src/lib/auth.js'
+import { hashPassword } from '../packages/shared/src/index.js'
 import { reconcileDay, syncKv, dailyJob } from '../apps/edge/src/lib/cron.js'
 import { resetDomainMemory } from '../apps/edge/src/lib/domains.js'
 import { clearUnknownCache } from '../apps/edge/src/lib/lookup.js'
@@ -330,6 +331,55 @@ describe('integration API (vrumvrum)', () => {
   })
 })
 
+describe('built-in admin login', () => {
+  const post = async (path: string, body: unknown, token?: string) => {
+    const r = await api.fetch(
+      new Request(`https://short.example/_/api${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'cf-connecting-ip': '192.0.2.50', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify(body),
+      }),
+      env,
+      ctx,
+    )
+    return { status: r.status, body: (await r.json()) as Record<string, unknown> }
+  }
+
+  it('temporary password → must change → full access; old sessions die', async () => {
+    await pg.query(`insert into shortener.admins (email, password_hash, must_change_password) values ($1, $2, true)`, [
+      'boss@example.com',
+      await hashPassword('Temp-Password-1'),
+    ])
+    expect((await post('/auth/login', { email: 'boss@example.com', password: 'nope' })).status).toBe(401)
+    const login = await post('/auth/login', { email: 'BOSS@example.com', password: 'Temp-Password-1' })
+    expect(login.status).toBe(200)
+    expect(login.body.must_change_password).toBe(true)
+    const temp = login.body.token as string
+    clearAuthCaches()
+    expect((await call('GET', '/links', undefined, temp)).status).toBe(403) // no scopes until changed
+
+    expect((await post('/auth/password', { current_password: 'Temp-Password-1', new_password: 'short' }, temp)).status).toBe(400)
+    const changed = await post('/auth/password', { current_password: 'Temp-Password-1', new_password: 'A-much-better-password' }, temp)
+    expect(changed.status).toBe(200)
+    expect(changed.body.must_change_password).toBe(false)
+    clearAuthCaches()
+    expect((await call('GET', '/links', undefined, changed.body.token as string)).status).toBe(200)
+    expect((await call('GET', '/links', undefined, temp)).status).toBe(401) // epoch bumped
+    expect((await post('/auth/login', { email: 'boss@example.com', password: 'Temp-Password-1' })).status).toBe(401)
+  })
+
+  it('locks the account after 10 failures', async () => {
+    await pg.query(`insert into shortener.admins (email, password_hash) values ($1, $2)`, ['lock@example.com', await hashPassword('Right-Password-1')])
+    for (let i = 0; i < 10; i++) await post('/auth/login', { email: 'lock@example.com', password: `wrong-${i}` })
+    expect((await post('/auth/login', { email: 'lock@example.com', password: 'Right-Password-1' })).status).toBe(429)
+  })
+
+  it('a forged session token is rejected', async () => {
+    const forged = 'eyJhbGciOiJIUzI1NiJ9.' + Buffer.from(JSON.stringify({ typ: 'adm', sub: 'boss@example.com', ep: 1, mc: false, iat: 1, exp: 9e9 })).toString('base64url') + '.AAAA'
+    expect((await call('GET', '/links', undefined, forged)).status).toBe(401)
+  })
+})
+
 describe('keys, domains, summary, health', () => {
   it('creates a key once, uses it, revokes it', async () => {
     const r = await call<{ id: string; key: string }>('POST', '/keys', { name: 'ci', scopes: ['links:read'] })
@@ -365,6 +415,6 @@ describe('keys, domains, summary, health', () => {
 
   it('public config endpoint', async () => {
     const r = await api.fetch(new Request('https://short.example/_/api/config'), env, ctx)
-    expect(await r.json()).toMatchObject({ auth: { provider: 'api_key' } })
+    expect(await r.json()).toMatchObject({ auth: { provider: 'password' } })
   })
 })

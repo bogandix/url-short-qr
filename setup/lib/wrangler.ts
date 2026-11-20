@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { ROOT, type State } from './state.js'
 
 export const EDGE_CONFIG = join(ROOT, 'apps/edge/wrangler.jsonc')
@@ -13,7 +13,7 @@ export type WranglerAuth = { token: string; accountId: string }
 export function wrangler(args: string[], auth: WranglerAuth, opts: { stdin?: string; quiet?: boolean } = {}): Promise<string> {
   return new Promise((resolve, reject) => {
     // Same Node binary as the wizard (wrangler needs >= 22.12), wrangler from this repo's node_modules.
-    const bin = createRequire(join(ROOT, 'package.json')).resolve('wrangler/bin/wrangler.js')
+    const bin = join(dirname(createRequire(join(ROOT, 'package.json')).resolve('wrangler/package.json')), 'bin/wrangler.js')
     const child = spawn(process.execPath, [bin, ...args], {
       cwd: ROOT,
       env: { ...process.env, CLOUDFLARE_API_TOKEN: auth.token, CLOUDFLARE_ACCOUNT_ID: auth.accountId, WRANGLER_SEND_METRICS: 'false' },

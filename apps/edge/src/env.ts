@@ -1,6 +1,7 @@
 export type Env = {
   LINKS: KVNamespace
-  FALLBACK: R2Bucket
+  /** Optional: without it the outage buffer uses KV (see lib/fallback.ts). */
+  FALLBACK?: R2Bucket
   /** Hyperdrive "shortener-edge": shortener_edge role (insert clicks, read links). */
   DB: Hyperdrive
   /** Hyperdrive "shortener-admin": shortener_admin role (API + crons). Falls back to DB. */

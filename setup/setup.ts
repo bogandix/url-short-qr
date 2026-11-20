@@ -5,6 +5,7 @@ import { parsePgUrl } from './databases/types.js'
 import { addDomain, promptDomain } from './domain.js'
 import { analyticsToken, cloudflareAuth, ensureHyperdrive, ensureKv, ensureQueue, ensureR2, findHyperdrive } from './lib/cloudflare.js'
 import { rolePasswordSql, runMigrations } from './lib/migrate.js'
+import { hashPassword } from '@shortener/shared'
 import { EMAIL_RE, lit, newApiKey, sha256Hex } from './lib/sql.js'
 import { loadFileConfig } from './lib/config.js'
 import { markStep, saveState, type State } from './lib/state.js'
@@ -20,7 +21,7 @@ function preflightTools() {
     throw new Error('git not available')
   }
   try {
-    createRequire(import.meta.url).resolve('wrangler/bin/wrangler.js')
+    createRequire(import.meta.url).resolve('wrangler/package.json')
   } catch {
     throw new Error('wrangler not installed (run npm install first)')
   }
@@ -81,8 +82,10 @@ async function database(s: State, db: Database, sec: Secrets, cfHasHyperdrive: b
   if (db.hideSchema) await task('Hiding schema from the REST API', () => db.hideSchema!())
   const info = db.stateInfo()
   s.database = { ...s.database!, ...Object.fromEntries(Object.entries(info).filter(([, v]) => v)) }
-  if (db.jwks) {
-    const j = await task('Configuring admin login (email OTP)', () => db.jwks!())
+  // Supabase Auth (email OTP) is opt-in: it changes the project's auth settings, which is
+  // wrong for a shared project. The built-in password login works everywhere.
+  if (db.jwks && process.env.SHORTENER_SUPABASE_AUTH === 'on') {
+    const j = await task('Configuring Supabase Auth login (email OTP)', () => db.jwks!())
     Object.assign(s.database!, { jwksUrl: j.jwksUrl, oidcIssuer: j.issuer, oidcAudience: j.audience, supabaseUrl: j.supabaseUrl, supabaseAnonKey: j.anonKey })
   }
   saveState(s)
@@ -110,7 +113,16 @@ export async function runSetup() {
   s.resources ??= {}
   const r = s.resources
   r.kvId = await task('KV shortener-links', () => ensureKv(cf, 'shortener-links'))
-  r.r2Bucket = await task('R2 shortener-fallback', () => ensureR2(cf, 'shortener-fallback'))
+  if (process.env.SHORTENER_R2 === 'off') r.r2Bucket = undefined
+  else {
+    try {
+      r.r2Bucket = await task('R2 shortener-fallback', () => ensureR2(cf, 'shortener-fallback'))
+    } catch (err) {
+      if (!/10042|enable R2/i.test(String((err as Error).message))) throw err
+      r.r2Bucket = undefined
+      p.log.warn('R2 is not enabled on this account: the outage buffer will use KV (free, ~1,000 writes/day). Enable R2 and re-run setup to switch.')
+    }
+  }
   if (sec.edgePw && sec.adminPw) {
     for (const [name, role, pw, key] of [
       ['shortener-edge', 'shortener_edge', sec.edgePw, 'hyperdriveEdgeId'],
@@ -158,11 +170,12 @@ export async function runSetup() {
   let tempPassword: string | undefined
   if (!s.steps.admin) {
     const email = (await ask('Admin email (for the admin UI login)', { env: 'SHORTENER_ADMIN_EMAIL', validate: (v) => (EMAIL_RE.test(v) ? undefined : 'Not an email') })).toLowerCase()
-    await db.runSql(`insert into shortener.admins (email) values (${lit(email)}) on conflict do nothing`)
-    if (db.ensureAuthUser) {
-      tempPassword = randomSecret(12) // must be changed at first sign-in
-      await task('Creating login user', () => db.ensureAuthUser!(email, tempPassword))
-    }
+    tempPassword = randomSecret(12) // must be changed at first sign-in
+    const hash = await hashPassword(tempPassword)
+    await db.runSql(`insert into shortener.admins (email, password_hash, must_change_password) values (${lit(email)}, ${lit(hash)}, true)
+      on conflict (email) do update set password_hash = excluded.password_hash, must_change_password = true,
+        failed_attempts = 0, locked_until = null, session_epoch = shortener.admins.session_epoch + 1`)
+    if (db.ensureAuthUser && s.database?.supabaseUrl) await task('Creating Supabase Auth user', () => db.ensureAuthUser!(email, tempPassword))
     apiKey = newApiKey()
     await db.runSql(`insert into shortener.api_keys (name, key_hash, scopes)
       values ('setup', ${lit(await sha256Hex(apiKey))}, array['links:read','links:write','stats:read','domains:admin','keys:admin'])`)

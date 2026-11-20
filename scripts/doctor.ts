@@ -30,7 +30,7 @@ async function cloudflare() {
 
   const settings = await cf.get<{ bindings: { name: string; type: string }[] }>(`${cf.acct}/workers/scripts/shortener-edge/settings`)
   const have = new Set(settings.bindings.map((b) => b.name))
-  const need = ['LINKS', 'FALLBACK', 'DB', 'DB_ADMIN', 'CLICKS_AE', 'SECRET_SALT', 'CF_ANALYTICS_TOKEN', 'ASSETS', ...(s.mode === 'paid' ? ['CLICKS'] : [])]
+  const need = ['LINKS', ...(s.resources?.r2Bucket ? ['FALLBACK'] : []), 'DB', 'DB_ADMIN', 'CLICKS_AE', 'SECRET_SALT', 'CF_ANALYTICS_TOKEN', 'ASSETS', ...(s.mode === 'paid' ? ['CLICKS'] : [])]
   add('worker', need.map((n) => ({ ok: have.has(n), check: `binding ${n}` })))
   const mode = settings.bindings.find((b) => b.name === 'MODE') as { text?: string } | undefined
   add('worker', [{ ok: mode?.text === s.mode, check: `MODE = ${s.mode}`, detail: mode?.text }])

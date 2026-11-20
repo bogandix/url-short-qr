@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import type { AppEnv } from './app.js'
+import { authApi } from './auth.js'
 import { domainsApi } from './domains.js'
 import { keysApi } from './keys.js'
 import { linksApi } from './links.js'
@@ -20,13 +21,14 @@ api.get('/config', (c) =>
   c.json({
     auth: c.env.SUPABASE_URL && c.env.SUPABASE_ANON_KEY
       ? { provider: 'supabase', url: c.env.SUPABASE_URL, anon_key: c.env.SUPABASE_ANON_KEY, password: true }
-      : { provider: 'api_key' },
+      : { provider: 'password' },
     mode: c.env.MODE,
   }),
 )
 
 api.get('/openapi.json', (c) => c.json(openapi(`${new URL(c.req.url).origin}/_/api`)))
 
+api.route('/auth', authApi)
 api.route('/links', linksApi)
 api.route('/domains', domainsApi)
 api.route('/keys', keysApi)

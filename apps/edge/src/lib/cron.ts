@@ -3,6 +3,7 @@ import type { Env } from '../env.js'
 import { adminSqlClient, sqlClient, withSql } from './db.js'
 import { publishDomains } from './domains.js'
 import { linkToKv } from './lookup.js'
+import { fallbackStore } from './fallback.js'
 
 export const CRON_REPLAY = '*/5 * * * *'
 export const CRON_DAILY = '15 0 * * *'
@@ -14,24 +15,25 @@ const INSERT_CHUNK = 100
 
 export type ReplayResult = { read: number; inserted: number; deleted: number; bad: number }
 
-/** Move up to `max` pending events from R2 into Postgres (source = 'replay'), then delete them. */
+/** Move up to `max` pending events from the fallback store into Postgres (source = 'replay'), then delete them. */
 export async function replayPending(env: Env, max = 1000): Promise<ReplayResult> {
   const result: ReplayResult = { read: 0, inserted: 0, deleted: 0, bad: 0 }
-  const listing = await env.FALLBACK.list({ prefix: 'pending/', limit: Math.min(max, 1000) })
-  if (listing.objects.length === 0) return result
+  const store = fallbackStore(env)
+  const listing = await store.list('pending/', Math.min(max, 1000))
+  if (listing.keys.length === 0) return result
 
   const events: { key: string; ev: ClickEvent }[] = []
   const badKeys: string[] = []
-  for (let i = 0; i < listing.objects.length; i += 50) {
-    const slice = listing.objects.slice(i, i + 50)
+  for (let i = 0; i < listing.keys.length; i += 50) {
+    const slice = listing.keys.slice(i, i + 50)
     const got = await Promise.all(
-      slice.map(async (o) => {
-        const obj = await env.FALLBACK.get(o.key)
-        if (!obj) return null
+      slice.map(async (key) => {
+        const text = await store.get(key)
+        if (text == null) return null
         try {
-          return { key: o.key, ev: { ...(JSON.parse(await obj.text()) as ClickEvent), source: 'replay' as const } }
+          return { key, ev: { ...(JSON.parse(text) as ClickEvent), source: 'replay' as const } }
         } catch {
-          badKeys.push(o.key)
+          badKeys.push(key)
           return null
         }
       }),
@@ -50,16 +52,16 @@ export async function replayPending(env: Env, max = 1000): Promise<ReplayResult>
         const { sql: text, params } = buildBulkInsert(chunk.map((c) => c.ev))
         const r = await sql.unsafe(text, params as never[])
         result.inserted += r.count
-        await env.FALLBACK.delete(chunk.map((c) => c.key))
+        await store.delete(chunk.map((c) => c.key))
         result.deleted += chunk.length
       }
     },
   )
   // Unparseable objects are moved aside, never silently dropped.
   for (const key of badKeys) {
-    const obj = await env.FALLBACK.get(key)
-    if (obj) await env.FALLBACK.put(key.replace(/^pending\//, 'bad/'), await obj.arrayBuffer())
-    await env.FALLBACK.delete(key)
+    const text = await store.get(key)
+    if (text != null) await store.put(key.replace(/^pending\//, 'bad/'), text)
+    await store.delete([key])
   }
   return result
 }

@@ -1,5 +1,6 @@
 import type { Env } from '../env.js'
 import { adminSqlClient, withSql } from './db.js'
+import { fallbackStore } from './fallback.js'
 
 export async function health(env: Env): Promise<Response> {
   const out: Record<string, unknown> = { mode: env.MODE }
@@ -27,11 +28,12 @@ export async function health(env: Env): Promise<Response> {
 
 /** Pending fallback objects, capped at 10,000 to keep the call cheap. */
 export async function countPending(env: Env, cap = 10_000): Promise<number> {
+  const store = fallbackStore(env)
   let n = 0
   let cursor: string | undefined
   do {
-    const page = await env.FALLBACK.list({ prefix: 'pending/', cursor, limit: 1000 })
-    n += page.objects.length
+    const page = await store.list('pending/', 1000, cursor)
+    n += page.keys.length
     cursor = page.truncated ? page.cursor : undefined
   } while (cursor && n < cap)
   return n

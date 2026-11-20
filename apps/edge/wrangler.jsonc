@@ -4,6 +4,7 @@
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "shortener-edge",
   "main": "src/index.ts",
+  "account_id": "e16b3865e05df85a04bb5e97566b2257",
   "compatibility_date": "2025-06-01",
   "compatibility_flags": [
     "nodejs_compat"
@@ -22,11 +23,26 @@
     "MODE": "free",
     "STRICT_LOGGING": "false",
     "RETENTION_MONTHS": "13",
-    "AE_DATASET": "shortener_clicks"
+    "AE_DATASET": "shortener_clicks",
+    "CF_ACCOUNT_ID": "e16b3865e05df85a04bb5e97566b2257"
   },
-  "kv_namespaces": [],
+  "kv_namespaces": [
+    {
+      "binding": "LINKS",
+      "id": "b0eec002036541ca8e5e9c361cc7b221"
+    }
+  ],
   "r2_buckets": [],
-  "hyperdrive": [],
+  "hyperdrive": [
+    {
+      "binding": "DB",
+      "id": "437872d0bd4e4c9193de7b4009173546"
+    },
+    {
+      "binding": "DB_ADMIN",
+      "id": "b2cbb476f7e54400a54491295a6f8339"
+    }
+  ],
   "analytics_engine_datasets": [
     {
       "binding": "CLICKS_AE",
@@ -50,5 +66,18 @@
       "0 */6 * * *"
     ]
   },
-  "routes": []
+  "routes": [
+    {
+      "pattern": "vv1.eu",
+      "custom_domain": true
+    },
+    {
+      "pattern": "www.vv1.eu",
+      "custom_domain": true
+    },
+    {
+      "pattern": "*.vv1.eu/*",
+      "zone_id": "c79814a30c4d0618583f1eea7a0d0c26"
+    }
+  ]
 }

@@ -1,6 +1,7 @@
 import { INSERT_CLICK_SQL, clickParams, type ClickEvent } from '@shortener/shared'
 import type { Env } from '../env.js'
 import { sqlClient, withSql } from './db.js'
+import { fallbackStore } from './fallback.js'
 
 export const NO_STORE = 'private, no-store, max-age=0'
 
@@ -28,9 +29,7 @@ export async function insertClick(env: Env, ev: ClickEvent): Promise<void> {
 
 async function putFallback(env: Env, ev: ClickEvent): Promise<boolean> {
   try {
-    await env.FALLBACK.put(fallbackKey(ev), JSON.stringify(ev), {
-      httpMetadata: { contentType: 'application/json' },
-    })
+    await fallbackStore(env).put(fallbackKey(ev), JSON.stringify(ev))
     return true
   } catch (err) {
     console.error('fallback-put-failed', ev.id, String(err))
