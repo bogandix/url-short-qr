@@ -1,0 +1,168 @@
+# shortener
+
+A self-hosted, multi-domain, QR-first short-link service on Cloudflare Workers and Postgres.
+Every request that reaches a configured host is written to Postgres exactly once, and a daily
+reconcile against Analytics Engine proves it.
+
+- `https://short.example/A7K2` → 302 to the target from the nearest Cloudflare location
+- many domains per deployment: apex, `www.`, and wildcard subdomains (`acme.short.example/A7K2`)
+- QR codes as SVG/PNG at `/_/qr/{CODE}.svg|png`, uppercase payload (QR alphanumeric mode)
+- admin API, admin UI (`/_/admin`) and CLI
+- **free mode** (free tiers, ~100k requests/day) or **paid mode** (Workers Paid, adds a queue)
+
+The full specification is in `../URL-SHORTENER.md`.
+
+## Requirements
+
+- Node **22.12+** (wrangler 4 needs it), npm, git
+- A Cloudflare account
+- Postgres: Supabase (default), Neon, or any Postgres reachable by Hyperdrive
+- A domain at any registrar; its nameservers will point to Cloudflare
+
+## Install
+
+```sh
+npm install
+npm run setup
+```
+
+The wizard is idempotent. It records IDs (never secrets) in `.shortener/state.json`, and
+re-running it resumes where it stopped. In order, it:
+
+1. asks for the mode, the database provider and region, the code length, the retention
+   and `STRICT_LOGGING` (or reads them from `shortener.config.json`, see the example file)
+2. opens a pre-filled Cloudflare API-token page and verifies the token you paste
+3. provisions the database, runs the migrations, creates the `shortener_edge` and
+   `shortener_admin` roles with generated passwords, hides the schema from REST, and sets
+   up the email-OTP admin login (Supabase)
+4. creates KV `shortener-links`, R2 `shortener-fallback`, Hyperdrive `shortener-edge` and
+   `shortener-admin` (caching off), and in paid mode the queues `shortener-clicks` and
+   `shortener-clicks-dlq`
+5. writes `apps/edge/wrangler.jsonc`, builds the admin UI, and deploys
+6. pushes the secrets `SECRET_SALT`, `CF_ANALYTICS_TOKEN` (a separate read-only token) and
+   `ALERT_WEBHOOK_URL`
+7. adds the first admin and prints the first API key, **once**
+8. adds the first domain (the admin host), see below
+9. runs smoke and prints a summary
+
+Add another domain at any time:
+
+```sh
+npm run domain:add go.other.example
+```
+
+This command:
+
+1. creates the zone (full), or reuses it
+2. turns registrar DNSSEC off and sets the nameservers through the registrar adapter
+3. waits for the zone to become active (this can take hours: press Ctrl-C and re-run to resume)
+4. applies the zone settings, turns on Cloudflare DNSSEC, and adds the DS record
+5. attaches the Worker as a custom domain on the apex and `www`; for a wildcard domain it
+   also adds `* AAAA 100::` (proxied) and the route `*.apex/*`
+6. registers the domain in Postgres and KV
+7. runs smoke
+
+Registrar adapters: **Cloudflare** (no-op), **Porkbun** (API key), **GoDaddy** (API key; falls
+back to manual when GoDaddy refuses the API), **Manual** (prints what to change and waits).
+Namecheap and Route 53 currently use the manual steps.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `npm run setup` | First install (resumable) |
+| `npm run domain:add [apex]` | Add a domain (resumable) |
+| `npm run doctor` | Checks zone settings, bindings, crons, health, roles, RLS, exposed schemas and storage. Exits non-zero on drift. Needs `CLOUDFLARE_API_TOKEN`; optional `SHORTENER_API_KEY`, `SHORTENER_DATABASE_URL` / `SUPABASE_ACCESS_TOKEN` |
+| `npm run smoke [host…]` | Per host: create a link, expect 302 + `no-store`, wait for the row (≤ 30 s) and the AE counter, expect 404 + row for an unknown code, archive the link. Needs `SHORTENER_API_KEY` |
+| `npm run replay` | Force the R2 → Postgres replay (normally every 5 min) |
+| `npm run migrate` | Apply migrations (`SHORTENER_DATABASE_URL`, or `SUPABASE_ACCESS_TOKEN` + `SUPABASE_PROJECT_REF`) |
+| `npm run teardown [-- --with-database]` | Remove everything the wizard created, after you type the account name |
+
+## Deploying from GitHub
+
+`.github/workflows/deploy.yml` runs the typecheck, unit and integration tests, migrations,
+`wrangler deploy` (plus the consumer in paid mode), and then smoke on every domain. Commit
+`apps/edge/wrangler.jsonc` (IDs only). Set these:
+
+- secrets: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `SHORTENER_API_KEY`, and either
+  `SHORTENER_DATABASE_URL` or `SUPABASE_ACCESS_TOKEN` + `SUPABASE_PROJECT_REF`
+- variables: `SHORTENER_ADMIN_HOST` (e.g. `short.example`) and `SHORTENER_DOMAINS`
+  (comma-separated hosts to smoke-test)
+
+## How a request is handled
+
+```
+any configured host ──▶ Worker "shortener-edge"
+   /{CODE}       lookup KV (host namespace, code) → log → 302 (never 301)
+   /{CODE}+      preview page, logged
+   /             home_url (302), logged
+   /_/qr/*       QR SVG/PNG, edge-cached for a year, not logged
+   /_/api/*      admin API, admin host only, writes shortener.audit
+   /_/admin/*    admin UI, admin host only
+   everything else: one logged row (not_found / invalid / rate_limited …)
+```
+
+**Logging, free mode.** The Worker runs `INSERT … ON CONFLICT (id, ts) DO NOTHING` through
+Hyperdrive. If that fails, it writes the event to R2 `pending/…`, and a cron replays it every
+5 minutes. If both fail, the redirect still happens and the loss goes to Workers Logs (or the
+Worker returns 503 when `STRICT_LOGGING=true`). **Paid mode** sends the event to the queue
+instead, which the consumer writes in batches of 100. Every event also adds 1 to Analytics
+Engine, and at 00:15 UTC a cron compares yesterday's counts per `(namespace, code, outcome)`,
+writes `shortener.reconcile_runs`, and calls the webhook when they differ.
+
+**Caching.** Every logged response sends `Cache-Control: private, no-store, max-age=0` and
+`X-Robots-Tag: noindex`. KV reads are edge-cached for 60 s, so pausing a link takes effect
+everywhere within about 60 s.
+
+**Crons.** Every 5 minutes: R2 replay. At 00:15 UTC: replay, then partitions, rollup, retention
+and reconcile. Every 6 hours: KV resync of links changed since the last run, plus the domain index.
+
+## Codes
+
+- **Alphabet:** `0123456789ABCDEFGHJKMNPQRSTUVWXYZ`, with no `I`, `L` or `O`.
+- **Reading:** codes are uppercased, `O→0`, `I/L→1`, and a trailing `/` is stripped. This also
+  applies to vanity codes when they are created: `promo-24` is stored as `PR0M0-24`, and every
+  spelling resolves to it.
+- **Random codes:** they use the domain's `code_length`, and move to the next length once
+  half of the space at that length is used.
+- **Never reused:** `DELETE` archives a link, so its code is not reused. For that reason smoke
+  creates `SMOKE1-xxxx` with a random suffix on each run.
+
+## Development
+
+```sh
+npm test                    # unit: router, outcomes/headers, logging fallback, replay, JWT, consumer, codes, hashes
+npm run test:integration    # migrations, roles/RLS, partitions, rollup, and the whole API + router + crons
+                            # against real Postgres (PGlite, in-process; no Docker needed)
+npm run typecheck
+npm run config:placeholder  # placeholder wrangler configs, for building before setup
+npm run dev:admin           # admin UI on Vite, proxying /_/api to `npm run dev:edge` (needs real bindings)
+```
+
+Load test (k6): `scripts/load/k6.js` sends 200 rps for 2 minutes of mixed traffic. Compare
+the row count with `http_reqs` and check that the next reconcile shows diff 0.
+
+## Decisions and deviations from the spec
+
+| Topic | What was done |
+|---|---|
+| Node version | The spec says Node ≥ 20. Current wrangler needs Node ≥ 22.12, so `engines` says 22.12. |
+| `STRICT_LOGGING` default | `false` (open point §17). |
+| Default wildcard mode | `namespace` (open point §17). |
+| Admin login | Supabase email OTP, verified against JWKS (RS256/ES256) with issuer and audience checks, plus admins in `shortener.admins`. Any OIDC issuer works through `ADMIN_JWKS_URL` / `OIDC_ISSUER` / `OIDC_AUDIENCE`; the UI's OTP flow is Supabase-specific. The UI also accepts an API key. |
+| Registrar adapters in v1 | GoDaddy, Porkbun, Cloudflare, Manual (open point §17). |
+| Roles | The migrations create the roles `NOLOGIN`; the wizard sets `LOGIN PASSWORD` so passwords never touch a file. The edge role can read only `(id, ts)` of clicks, which `ON CONFLICT` requires. RLS policies exist for the two roles only. |
+| Rollup breakdowns | `uniques` and `by_country/city/device/os` count humans only; `clicks` includes bots, and `bots` counts them separately. |
+| Analytics Engine | The event's UTC day is also stored (blob5), so reconcile matches Postgres exactly at midnight. At very high volume AE samples, and `SUM(_sample_interval)` is then an estimate. |
+| Wildcard route "fail closed" | `domain:add` tries to set it via the API and warns if it cannot. Custom domains have no origin, so they fail closed by design. |
+| Admin API extras | `/_/api/config` (public, login settings), `/_/api/ops/{replay,sync,reconcile/:day,health,clicks}` (for the CLI and the Health screen). |
+| Token permissions | Adds read-only Page Rules, Single Redirect and Cache Settings to the spec's list so `doctor` can detect forbidden rules. |
+| Tests | Plain vitest with in-memory KV/R2/AE fakes, plus PGlite for real-Postgres integration, instead of `@cloudflare/vitest-pool-workers`. |
+
+## Privacy
+
+Raw IPs are never stored: `ip_hash` and `visitor_hash` are HMACs under a daily salt that is
+derived and never stored. Public responses set no cookies. Your privacy notice must say that
+requests are logged; which fields (city-level location, device, language, referrer); the
+retention (`retentionMonths` for raw clicks, rollups kept); and the purpose (counting and
+abuse prevention). Access requests for individual people cannot be served, by design.

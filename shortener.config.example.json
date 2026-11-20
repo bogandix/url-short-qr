@@ -1,0 +1,11 @@
+{
+  "mode": "free",
+  "retentionMonths": 13,
+  "strictLogging": false,
+  "codeLength": 4,
+  "database": { "provider": "supabase", "region": "eu-central-1" },
+  "domains": [
+    { "apex": "short.example", "registrar": "porkbun", "serveWww": true, "wildcard": false, "homeUrl": "https://www.example.com" },
+    { "apex": "go.other.example", "registrar": "manual", "serveWww": false, "wildcard": true, "wildcardMode": "namespace" }
+  ]
+}

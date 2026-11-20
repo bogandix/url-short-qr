@@ -1,0 +1,40 @@
+{
+  "name": "shortener",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "setup"
+  ],
+  "scripts": {
+    "build": "npm run build -w @shortener/admin",
+    "typecheck": "tsc -p packages/shared/tsconfig.json --noEmit && tsc -p apps/edge/tsconfig.json --noEmit && tsc -p apps/consumer/tsconfig.json --noEmit && tsc -p apps/admin/tsconfig.json --noEmit && tsc -p setup/tsconfig.json --noEmit",
+    "test": "vitest run",
+    "setup": "tsx setup/cli.ts setup",
+    "domain:add": "tsx setup/cli.ts domain-add",
+    "doctor": "tsx scripts/doctor.ts",
+    "smoke": "tsx scripts/smoke.ts",
+    "replay": "tsx scripts/replay.ts",
+    "teardown": "tsx scripts/teardown.ts",
+    "dev:edge": "wrangler dev -c apps/edge/wrangler.jsonc",
+    "dev:admin": "npm run dev -w @shortener/admin",
+    "deploy": "npm run build && wrangler deploy -c apps/edge/wrangler.jsonc",
+    "test:integration": "vitest run -c vitest.integration.config.ts",
+    "migrate": "tsx scripts/migrate.ts",
+    "config:placeholder": "tsx scripts/gen-config.ts"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.17",
+    "@electric-sql/pglite-socket": "^0.2.20",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.12",
+    "wrangler": "^4.166.0"
+  },
+  "engines": {
+    "node": ">=22.12"
+  }
+}
