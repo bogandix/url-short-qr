@@ -295,7 +295,8 @@ linksApi.get('/', scope('links:read'), async (c) => {
   )
   const last = rows[rows.length - 1]
   const next = rows.length === limit && last ? btoa(JSON.stringify({ u: last.updated_at.toISOString(), id: last.id })) : null
-  return c.json({ items: rows.map((r) => present(r)), next_cursor: next })
+  const stats = await linkStats(c, rows.map((r) => r.id))
+  return c.json({ items: rows.map((r) => ({ ...present(r), stats: stats.get(r.id) ?? EMPTY_STATS })), next_cursor: next })
 })
 
 async function getLink(c: Ctx, sql: Sql): Promise<LinkRow> {
@@ -307,6 +308,75 @@ async function getLink(c: Ctx, sql: Sql): Promise<LinkRow> {
   if (!row || !canAccess(c.get('auth'), row.namespace, row.owner)) throw new ApiError(404, 'not_found')
   return row
 }
+
+type LinkStats = { total: number; last_7d: number; today: number; last_click_at: string | null }
+const EMPTY_STATS: LinkStats = { total: 0, last_7d: 0, today: 0, last_click_at: null }
+
+/**
+ * Human clicks per link (bots excluded): all-time and last 7 days from the nightly rollups
+ * plus raw rows for days not rolled up yet; last click from the raw table.
+ */
+async function linkStats(c: Ctx, ids: string[]): Promise<Map<string, LinkStats>> {
+  const out = new Map<string, LinkStats>()
+  if (ids.length === 0) return out
+  const rows = await withSql(
+    () => adminSqlClient(c.env),
+    (sql) => sql<{ id: string; total: number; last_7d: number; today: number; last_click_at: Date | null }[]>`
+      with lf as (select coalesce(max(day) + 1, '1970-01-01'::date) as live_from from shortener.clicks_daily)
+      select l.id,
+        (coalesce((select sum(d.clicks - d.bots) from shortener.clicks_daily d
+                   where d.namespace = l.namespace and d.code = l.code and d.outcome = 'redirect'), 0)
+         + (select count(*) from shortener.clicks x, lf
+            where x.namespace = l.namespace and x.code = l.code and x.outcome = 'redirect' and not x.is_bot and x.ts >= lf.live_from))::int as total,
+        (coalesce((select sum(d.clicks - d.bots) from shortener.clicks_daily d
+                   where d.namespace = l.namespace and d.code = l.code and d.outcome = 'redirect' and d.day >= current_date - 6), 0)
+         + (select count(*) from shortener.clicks x, lf
+            where x.namespace = l.namespace and x.code = l.code and x.outcome = 'redirect' and not x.is_bot
+              and x.ts >= greatest(lf.live_from, current_date - 6)))::int as last_7d,
+        (select count(*) from shortener.clicks x
+         where x.namespace = l.namespace and x.code = l.code and x.outcome = 'redirect' and not x.is_bot and x.ts >= current_date)::int as today,
+        (select max(x.ts) from shortener.clicks x
+         where x.namespace = l.namespace and x.code = l.code and x.outcome = 'redirect' and not x.is_bot) as last_click_at
+      from shortener.links l
+      where l.id = any(${pgArray(ids)}::uuid[])`,
+  )
+  for (const r of rows) out.set(r.id, { total: r.total, last_7d: r.last_7d, today: r.today, last_click_at: r.last_click_at ? new Date(r.last_click_at).toISOString() : null })
+  return out
+}
+
+// GET /links/summary — headline numbers for the Links page (respects key restrictions).
+linksApi.get('/summary', scope('links:read'), async (c) => {
+  const auth = c.get('auth')
+  const ns = c.req.query('namespace') ?? null
+  const nsAllow = pgArray(auth.namespaces?.length ? auth.namespaces : null)
+  const ownerLike = auth.ownerPrefix ? auth.ownerPrefix.replace(/[%_\\]/g, '\\$&') + '%' : null
+  const out = await withSql(
+    () => adminSqlClient(c.env),
+    async (sql) => {
+      const scopeWhere = (alias: string) => sql`
+        (${ns}::text is null or ${sql(alias)}.namespace = ${ns})
+        and (${nsAllow}::text[] is null or ${sql(alias)}.namespace = any(${nsAllow}::text[]))
+        and (${ownerLike}::text is null or l.owner like ${ownerLike})`
+      const links = await sql<{ total: number; active: number; paused: number; archived: number; created_7d: number }[]>`
+        select count(*)::int as total,
+               (count(*) filter (where status = 'active'))::int as active,
+               (count(*) filter (where status = 'paused'))::int as paused,
+               (count(*) filter (where status = 'archived'))::int as archived,
+               (count(*) filter (where created_at >= now() - interval '7 days'))::int as created_7d
+        from shortener.links l where ${scopeWhere('l')}`
+      const clicks = await sql<{ today: number; d7: number; d30: number; visitors_today: number }[]>`
+        select (count(*) filter (where x.ts >= current_date))::int as today,
+               (count(*) filter (where x.ts >= current_date - 6))::int as d7,
+               count(*)::int as d30,
+               (count(distinct x.visitor_hash) filter (where x.ts >= current_date))::int as visitors_today
+        from shortener.clicks x
+        join shortener.links l on l.namespace = x.namespace and l.code = x.code
+        where x.outcome = 'redirect' and not x.is_bot and x.ts >= current_date - 29 and ${scopeWhere('x')}`
+      return { links: links[0], clicks: clicks[0] }
+    },
+  )
+  return c.json(out)
+})
 
 // GET /links/by-external/:external_id?owner= — the integration lookup (owner defaults to none).
 linksApi.get('/by-external/:external_id', scope('links:read'), async (c) => {
@@ -420,7 +490,7 @@ linksApi.get('/:namespace/:code/stats', scope('stats:read'), async (c) => {
       async (sql) => {
         const link = await getLink(c, sql)
         const daily = await sql`
-          select day::text, outcome, clicks, uniques, bots, by_country, by_city, by_device, by_os, by_browser, by_referer
+          select day::text, outcome, clicks, uniques, bots, by_country, by_city, by_device, by_os, by_browser, by_referer, by_language, by_source
           from shortener.clicks_daily
           where namespace = ${link.namespace} and code = ${link.code}
             and day >= ${from}::date and day <= ${to}::date
@@ -471,8 +541,12 @@ linksApi.get('/:namespace/:code/clicks', scope('stats:read'), async (c) => {
       async (sql) => {
         const link = await getLink(c, sql)
         return sql<{ id: string; ts: Date }[]>`
-          select id, ts, host, outcome, method, path, query, scheme, country, region, region_code, city,
-                 timezone, colo, asn, as_org, ua, device, os, browser, browser_version, lang, referer,
+          select id, ts, host, outcome, method, path, query, scheme,
+                 country, region, region_code, city, postal_code, metro_code, continent, latitude, longitude, is_eu, timezone, colo,
+                 asn, as_org, http_protocol, tls_version, client_rtt_ms,
+                 ua, device, device_vendor, device_model, os, browser, browser_version, browser_major, engine, cpu_arch,
+                 ch_platform, ch_mobile, ch_model, lang, lang_primary, dnt,
+                 referer, referer_host, utm_source, utm_medium, utm_campaign, utm_term, utm_content,
                  is_bot, bot_name, ray_id, source
           from shortener.clicks
           where namespace = ${link.namespace} and code = ${link.code}

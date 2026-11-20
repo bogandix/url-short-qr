@@ -99,8 +99,39 @@ describe('status and headers per outcome', () => {
     const { env } = makeEnv(domains, links)
     const res = await handleRequest(req('https://short.example/A7K2', { ua: 'Slackbot-LinkExpanding 1.0' }), env, ctx, api)
     expect(res.status).toBe(302)
-    const row = [...db.clicks.values()][0]!
-    expect(row[28]).toBe(true) // is_bot
+    expect(clickRows()[0]!.is_bot).toBe(true)
+  })
+})
+
+describe('tracking detail', () => {
+  it('captures location, network, device, client hints, language, referrer and UTM', async () => {
+    const { env } = makeEnv(domains, links)
+    const r = new Request('https://short.example/A7K2?utm_source=flyer&utm_medium=qr&utm_campaign=sample-1', {
+      headers: {
+        'cf-connecting-ip': '203.0.113.9',
+        'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1',
+        'accept-language': 'ro-RO,ro;q=0.9,en;q=0.8',
+        referer: 'https://www.facebook.com/some/post?x=1',
+        'sec-ch-ua-platform': '"iOS"',
+        'sec-ch-ua-mobile': '?1',
+        'sec-gpc': '1',
+      },
+    })
+    Object.defineProperty(r, 'cf', {
+      value: {
+        country: 'RO', city: 'Bucharest', region: 'Bucharest', regionCode: 'B', timezone: 'Europe/Bucharest', colo: 'OTP',
+        continent: 'EU', postalCode: '010011', latitude: '44.43225', longitude: '26.10626', isEUCountry: '1',
+        asn: 8708, asOrganization: 'DIGI ROMANIA S.A.', httpProtocol: 'HTTP/3', tlsVersion: 'TLSv1.3', clientTcpRtt: 23,
+      },
+    })
+    expect((await handleRequest(r, env, ctx, api)).status).toBe(302)
+    expect(clickRows()[0]).toMatchObject({
+      outcome: 'redirect', country: 'RO', city: 'Bucharest', continent: 'EU', postal_code: '010011',
+      latitude: 44.43, longitude: 26.11, is_eu: true, asn: 8708, http_protocol: 'HTTP/3', tls_version: 'TLSv1.3', client_rtt_ms: 23,
+      device: 'mobile', device_vendor: 'Apple', device_model: 'iPhone', os: 'iOS 18.1', browser: 'Mobile Safari', browser_major: '18',
+      engine: 'WebKit', ch_platform: 'iOS', ch_mobile: true, lang_primary: 'ro', dnt: true,
+      referer_host: 'www.facebook.com', utm_source: 'flyer', utm_medium: 'qr', utm_campaign: 'sample-1', is_bot: false,
+    })
   })
 })
 

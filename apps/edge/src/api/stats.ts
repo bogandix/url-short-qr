@@ -5,7 +5,19 @@ export const statsApi = newApi()
 statsApi.use('*', authed, scope('stats:read'))
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/
-const DIMS = ['country', 'city', 'device', 'os', 'browser', 'referer'] as const
+const DIMS = ['country', 'city', 'device', 'os', 'browser', 'referer', 'language', 'source'] as const
+
+/** Raw-row expression for each breakdown (days not rolled up yet). */
+const RAW_DIM: Record<(typeof DIMS)[number], string> = {
+  country: 'c.country',
+  city: 'c.city',
+  device: 'c.device',
+  os: 'c.os',
+  browser: 'c.browser',
+  referer: 'coalesce(c.referer_host, shortener.referer_host(c.referer))',
+  language: 'c.lang_primary',
+  source: 'shortener.traffic_source(c.utm_source, coalesce(c.referer_host, shortener.referer_host(c.referer)))',
+}
 
 type Filters = { from: string; to: string; namespace: string | null; owner: string | null; nsAllow: string | null; ownerLike: string | null }
 
@@ -101,7 +113,7 @@ statsApi.get('/overview', async (c) => {
       const breakdowns: Record<string, { key: string; n: number }[]> = {}
       for (const dim of DIMS) {
         const col = `by_${dim}`
-        const rawExpr = dim === 'referer' ? sql`shortener.referer_host(c.referer)` : sql`c.${sql(dim)}`
+        const rawExpr = sql.unsafe(RAW_DIM[dim])
         breakdowns[dim] = await sql<{ key: string; n: number }[]>`
           select key, sum(n)::int as n from (
             select e.key, e.value::int as n from shortener.clicks_daily d
@@ -146,4 +158,27 @@ statsApi.get('/summary', async (c) => {
     },
   )
   return c.json(out)
+})
+
+/** Live feed: the most recent requests (all outcomes), newest first, without hashes. */
+statsApi.get('/recent', async (c) => {
+  const f = filters(c)
+  if (!f) return c.json({ error: 'bad_range' }, 400)
+  const limit = Math.min(200, Math.max(1, Number(c.req.query('limit') ?? 50) || 50))
+  const humansOnly = c.req.query('humans') === '1'
+  const rows = await withSql(
+    () => adminSqlClient(c.env),
+    (sql) => sql`
+      select c.ts, c.host, c.namespace, c.code, c.outcome, c.scheme, c.country, c.city, c.region, c.continent,
+             c.device, c.device_vendor, c.device_model, c.os, c.browser, c.browser_major, c.lang_primary,
+             coalesce(c.referer_host, shortener.referer_host(c.referer)) as referer_host,
+             c.utm_source, c.utm_medium, c.utm_campaign, c.as_org, c.http_protocol, c.is_bot, c.bot_name, l.title
+      from shortener.clicks c
+      left join shortener.links l on l.namespace = c.namespace and l.code = c.code
+      where c.ts >= now() - interval '30 days' and ${where(sql, f, 'c')}
+        and (${humansOnly} = false or not c.is_bot)
+      order by c.ts desc
+      limit ${limit}`,
+  )
+  return c.json({ items: rows })
 })

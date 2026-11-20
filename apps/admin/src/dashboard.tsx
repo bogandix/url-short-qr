@@ -1,7 +1,8 @@
 import { useState } from 'preact/hooks'
 import { api, type Domain } from './api'
-import { Bars, Card, ErrorBox, Top, go, useAsync } from './ui'
+import { Bars, ErrorBox, FeedItem, Top, countryName, flag, go, useAsync, type ClickRow } from './ui'
 
+type Dim = 'country' | 'city' | 'device' | 'os' | 'browser' | 'referer' | 'language' | 'source'
 type Overview = {
   from: string
   to: string
@@ -9,12 +10,12 @@ type Overview = {
   series: { day: string; clicks: number; uniques: number; bots: number; not_found: number; requests: number }[]
   outcomes: { outcome: string; n: number }[]
   top: { namespace: string; code: string; title: string | null; target_url: string | null; owner: string | null; clicks: number; uniques: number }[]
-  breakdowns: Record<'country' | 'city' | 'device' | 'os' | 'browser' | 'referer', { key: string; n: number }[]>
+  breakdowns: Record<Dim, { key: string; n: number }[]>
 }
 
 const day = (offset: number) => new Date(Date.now() - offset * 864e5).toISOString().slice(0, 10)
 
-/** Fill missing days so the chart has a bar per day. */
+/** One bar per day, including empty days. */
 function fill(series: Overview['series'], from: string, to: string) {
   const by = new Map(series.map((s) => [s.day, s]))
   const out: { label: string; value: number; sub: number }[] = []
@@ -27,82 +28,134 @@ function fill(series: Overview['series'], from: string, to: string) {
 }
 
 const asCounts = (rows: { key: string; n: number }[] = []) => Object.fromEntries(rows.map((r) => [r.key, r.n]))
+const LANG = (() => {
+  try {
+    return new Intl.DisplayNames(['en'], { type: 'language' })
+  } catch {
+    return null
+  }
+})()
+
+const TITLES: [Dim, string][] = [
+  ['country', 'Countries'],
+  ['city', 'Cities'],
+  ['source', 'Sources'],
+  ['referer', 'Referrers'],
+  ['device', 'Devices'],
+  ['os', 'Operating systems'],
+  ['browser', 'Browsers'],
+  ['language', 'Languages'],
+]
 
 export function Dashboard() {
   const [days, setDays] = useState(30)
   const [ns, setNs] = useState('')
   const [owner, setOwner] = useState('')
+  const [humans, setHumans] = useState(true)
   const domains = useAsync(() => api<{ items: Domain[] }>('/domains').catch(() => ({ items: [] as Domain[] })), [])
-  const qs = new URLSearchParams({ from: day(days - 1), to: day(0), top: '15' })
+  const qs = new URLSearchParams({ from: day(days - 1), to: day(0), top: '10' })
   if (ns) qs.set('namespace', ns)
   if (owner) qs.set('owner', owner)
   const o = useAsync(() => api<Overview>(`/stats/overview?${qs}`), [qs.toString()])
+  const feedQs = new URLSearchParams(qs)
+  feedQs.set('limit', '25')
+  if (humans) feedQs.set('humans', '1')
+  const feed = useAsync(() => api<{ items: ClickRow[] }>(`/stats/recent?${feedQs}`), [feedQs.toString()])
   const d = o.data
   const t = d?.totals
   return (
     <>
-      <Card
-        title="Dashboard"
-        actions={
-          <>
-            <select value={ns} onChange={(e) => setNs(e.currentTarget.value)} aria-label="Domain">
-              <option value="">All domains</option>
-              {domains.data?.items.map((x) => <option key={x.id} value={x.apex}>{x.apex}</option>)}
-            </select>
-            <input placeholder="Owner (e.g. vrumvrum:…)" value={owner} onChange={(e) => setOwner(e.currentTarget.value)} style={{ width: '14rem' }} />
-            <select value={days} onChange={(e) => setDays(Number(e.currentTarget.value))} aria-label="Range">
-              <option value={1}>Today</option>
-              <option value={7}>7 days</option>
-              <option value={30}>30 days</option>
-              <option value={90}>90 days</option>
-              <option value={365}>1 year</option>
-            </select>
-          </>
-        }
-      >
-        <ErrorBox error={o.error} />
-        <div class="stats">
-          <div><strong>{t?.clicks ?? '–'}</strong><span>human clicks</span></div>
-          <div><strong>{t?.uniques ?? '–'}</strong><span>unique visitors (per day)</span></div>
-          <div><strong>{t?.bots ?? '–'}</strong><span>bots & link previews</span></div>
-          <div><strong>{t?.not_found ?? '–'}</strong><span>unknown codes</span></div>
-          <div><strong>{t?.requests ?? '–'}</strong><span>requests logged</span></div>
+      <div class="page-head">
+        <div>
+          <h1>Dashboard</h1>
+          <p>Every scan and click, counted once. Bots are kept apart.</p>
         </div>
+        <div class="seg" role="group" aria-label="Range">
+          {[1, 7, 30, 90].map((n) => (
+            <button key={n} aria-pressed={days === n} onClick={() => setDays(n)}>{n === 1 ? 'Today' : `${n}d`}</button>
+          ))}
+        </div>
+      </div>
+      <div class="filters" style={{ marginBottom: 0 }}>
+        <select value={ns} onChange={(e) => setNs(e.currentTarget.value)} aria-label="Domain">
+          <option value="">All domains</option>
+          {domains.data?.items.map((x) => <option key={x.id} value={x.apex}>{x.apex}</option>)}
+        </select>
+        <input placeholder="Owner, e.g. vrumvrum:garage:42" value={owner} onChange={(e) => setOwner(e.currentTarget.value)} aria-label="Owner" />
+      </div>
+      <ErrorBox error={o.error} />
+      <div class="stats summary">
+        <div class="stat hero"><strong>{t?.clicks ?? '–'}</strong><span>scans & clicks by people</span></div>
+        <div class="stat"><strong>{t?.uniques ?? '–'}</strong><span>unique visitors (per day)</span></div>
+        <div class="stat"><strong>{t?.bots ?? '–'}</strong><span>bots & link previews</span></div>
+        <div class="stat"><strong>{t?.not_found ?? '–'}</strong><span>unknown codes</span></div>
+        <div class="stat"><strong>{t?.requests ?? '–'}</strong><span>requests logged</span></div>
+      </div>
+      <section class="card">
+        <header><h2>Per day</h2><div class="legend"><span><i />Scans & clicks</span><span><i class="sub" />Unique visitors</span></div></header>
         {d && <Bars data={fill(d.series, d.from, d.to)} />}
-        <p class="muted small">Dark: human clicks · light: unique visitors. Every request is logged; bots are counted apart.</p>
-      </Card>
-      <Card title="Top links">
-        <div class="tablewrap">
-          <table>
-            <thead><tr><th>Link</th><th>Target</th><th>Owner</th><th class="num">Clicks</th><th class="num">Uniques</th></tr></thead>
-            <tbody>
-              {d?.top.map((l) => (
-                <tr key={l.namespace + l.code} class="click" onClick={() => go(`link/${l.namespace}/${l.code}`)}>
-                  <td><code>{l.namespace}/{l.code}</code>{l.title && <div class="muted">{l.title}</div>}</td>
-                  <td class="trunc">{l.target_url ?? '—'}</td>
-                  <td class="muted">{l.owner ?? ''}</td>
-                  <td class="num">{l.clicks}</td>
-                  <td class="num">{l.uniques}</td>
-                </tr>
-              ))}
-              {d && d.top.length === 0 && <tr><td colSpan={5} class="muted">No clicks in this range yet.</td></tr>}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+      </section>
+      <section class="card">
+        <header><h2>Top links</h2><a class="btn small" href="#/links">All links</a></header>
+        <table class="list">
+          <thead><tr><th>Link</th><th>Goes to</th><th>Owner</th><th class="num">Scans</th><th class="num">Uniques</th></tr></thead>
+          <tbody>
+            {d?.top.map((l) => (
+              <tr key={l.namespace + l.code} class="click" onClick={() => go(`link/${l.namespace}/${l.code}`)}>
+                <td class="primary-cell" data-label="Link"><code>{l.namespace.toUpperCase()}/{l.code}</code>{l.title && <div class="muted small trunc">{l.title}</div>}</td>
+                <td class="trunc wide" data-label="To">{l.target_url ?? '—'}</td>
+                <td class="muted hide-sm">{l.owner ?? ''}</td>
+                <td class="num metric status-cell"><b>{l.clicks}</b></td>
+                <td class="num metric" data-label="Uniques">{l.uniques}</td>
+              </tr>
+            ))}
+            {d && d.top.length === 0 && <tr><td colSpan={5} class="muted">No scans in this range yet.</td></tr>}
+          </tbody>
+        </table>
+      </section>
       {d && (
-        <Card title="Audience">
+        <section class="card">
+          <header><h2>Audience</h2></header>
           <div class="tops">
-            <Top title="Countries" counts={asCounts(d.breakdowns.country)} />
-            <Top title="Cities" counts={asCounts(d.breakdowns.city)} />
-            <Top title="Devices" counts={asCounts(d.breakdowns.device)} />
-            <Top title="OS" counts={asCounts(d.breakdowns.os)} />
-            <Top title="Browsers" counts={asCounts(d.breakdowns.browser)} />
-            <Top title="Referrers" counts={asCounts(d.breakdowns.referer)} />
-            <Top title="Outcomes (all requests)" counts={Object.fromEntries(d.outcomes.map((x) => [x.outcome, x.n]))} />
+            {TITLES.map(([k, title]) => (
+              <Top
+                key={k}
+                title={title}
+                counts={asCounts(d.breakdowns[k])}
+                label={
+                  k === 'country'
+                    ? (c) => `${flag(c)} ${countryName(c)}`
+                    : k === 'language'
+                      ? (c) => {
+                          try {
+                            return LANG?.of(c) ?? c
+                          } catch {
+                            return c
+                          }
+                        }
+                      : undefined
+                }
+              />
+            ))}
+            <Top title="All requests by outcome" counts={Object.fromEntries(d.outcomes.map((x) => [x.outcome, x.n]))} />
           </div>
-        </Card>
+        </section>
       )}
+      <section class="card">
+        <header>
+          <h2>Live</h2>
+          <div class="row">
+            <label class="check"><input type="checkbox" checked={humans} onChange={(e) => setHumans(e.currentTarget.checked)} /> People only</label>
+            <button class="small" onClick={() => feed.reload()}>Refresh</button>
+          </div>
+        </header>
+        <ErrorBox error={feed.error} />
+        <ul class="feed">
+          {feed.data?.items.map((c, i) => <FeedItem key={`${c.ts}-${i}`} c={c} />)}
+          {feed.data && feed.data.items.length === 0 && <li class="muted">Nothing yet.</li>}
+        </ul>
+        <p class="muted small">Tap a row for everything recorded: location, network, device, language, source and campaign.</p>
+      </section>
     </>
   )
 }

@@ -1,4 +1,4 @@
-import type { ClickEvent, DomainRow, KvLinkValue } from '@shortener/shared'
+import { CLICK_COLUMNS, type ClickEvent, type DomainRow, type KvLinkValue } from '@shortener/shared'
 import type { Env } from '../src/env.js'
 
 /** Fake postgres.js client. Shared state lets tests take the database "down". */
@@ -13,7 +13,8 @@ export const db = {
   },
 }
 
-const COLS = 32
+const COLS = CLICK_COLUMNS.length
+export const col = (name: keyof ClickEvent) => CLICK_COLUMNS.indexOf(name)
 
 function fakeSql() {
   const tag = (async () => {
@@ -43,14 +44,8 @@ function fakeSql() {
 
 export const postgresMock = { default: () => fakeSql() }
 
-export function clickRows(): { outcome: string; source: string; scheme: string; code: string; namespace: string }[] {
-  return [...db.clicks.values()].map((r) => ({
-    code: r[4] as string,
-    namespace: r[3] as string,
-    outcome: r[6] as string,
-    scheme: r[10] as string,
-    source: r[31] as string,
-  }))
+export function clickRows(): Record<keyof ClickEvent, unknown>[] & { outcome: string; source: string; scheme: string; code: string; namespace: string }[] {
+  return [...db.clicks.values()].map((r) => Object.fromEntries(CLICK_COLUMNS.map((c, i) => [c, r[i]]))) as never
 }
 
 export class FakeKV {

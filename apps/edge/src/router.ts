@@ -98,7 +98,8 @@ export async function handleRequest(
   return respondForOutcome(outcome, link, {
     homeUrl: domain?.home_url,
     notFoundUrl: res.kind === 'ok' ? domain?.not_found_url : null,
-    shortUrl: shortUrl(url.hostname, code),
+    shortUrl: code ? shortUrl(url.hostname, code) : undefined,
+    wantsHtml: req.method === 'GET' && (req.headers.get('accept') ?? '').includes('text/html'),
   })
 }
 

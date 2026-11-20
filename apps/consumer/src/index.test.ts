@@ -5,8 +5,9 @@ vi.mock('postgres', () => ({
   default: () => ({
     unsafe: async (_sql: string, params: unknown[]) => {
       if (state.fail) throw new Error('db down')
-      state.inserted += params.length / 32
-      return Object.assign([], { count: params.length / 32 })
+      const { CLICK_COLUMN_COUNT } = await import('@shortener/shared')
+      state.inserted += params.length / CLICK_COLUMN_COUNT
+      return Object.assign([], { count: params.length / CLICK_COLUMN_COUNT })
     },
     end: async () => {},
   }),

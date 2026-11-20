@@ -172,6 +172,8 @@ export type Link = {
   updated_at: string
   short_url: string
   qr: { svg: string; png: string; payload: string }
+  external_id?: string | null
+  stats?: { total: number; last_7d: number; today: number; last_click_at: string | null }
 }
 
 export type Domain = {
