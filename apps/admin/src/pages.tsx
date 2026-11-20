@@ -1,6 +1,6 @@
 import { useState } from 'preact/hooks'
 import { api, authConfig, changePassword, passwordLogin, sendOtp, setSession, verifyOtp, type Domain, type Link } from './api'
-import { Bars, Card, ErrorBox, Status, Top, go, useAsync } from './ui'
+import { Bars, Card, ErrorBox, Status, Top, go, useAsync, withQuery } from './ui'
 
 // ───────────── Login ─────────────
 export function Login() {
@@ -212,10 +212,10 @@ function QrBlock({ link }: { link: Link }) {
   // QR images are served on the link's own host; on the admin host they are fetched cross-origin.
   return (
     <div class="qr">
-      <img src={`${link.qr.svg}?size=256`} width={192} height={192} alt={`QR code for ${link.short_url}`} />
+      <img src={withQuery(link.qr.svg, { size: 256 })} width={192} height={192} alt={`QR code for ${link.short_url}`} />
       <div class="row">
-        <a class="button ghost" href={`${link.qr.svg}?size=1024`} download={`${link.code}.svg`}>SVG</a>
-        <a class="button ghost" href={`${link.qr.png}?size=1024`} download={`${link.code}.png`}>PNG</a>
+        <a class="button ghost" href={withQuery(link.qr.svg, { size: 1024 })} download={`${link.code}.svg`}>SVG</a>
+        <a class="button ghost" href={withQuery(link.qr.png, { size: 1024 })} download={`${link.code}.png`}>PNG</a>
       </div>
       <code class="muted small">{link.qr.payload}</code>
     </div>

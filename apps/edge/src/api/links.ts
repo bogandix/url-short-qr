@@ -13,7 +13,7 @@ import { canAccess } from '../lib/auth.js'
 import { adminSqlClient, pgArray, withSql, type Sql } from '../lib/db.js'
 import { loadDomains } from '../lib/domains.js'
 import { linkToKv } from '../lib/lookup.js'
-import { shortPayload } from '../lib/qr.js'
+import { QR_RENDER_VERSION, shortPayload } from '../lib/qr.js'
 import { authed, newApi, scope, type Ctx } from './app.js'
 
 export const linksApi = newApi()
@@ -104,7 +104,11 @@ function present(row: LinkRow) {
   return {
     ...row,
     short_url: shortUrl(row.namespace, row.code),
-    qr: { svg: `${origin}/_/qr/${row.code}.svg`, png: `${origin}/_/qr/${row.code}.png`, payload: shortPayload(row.namespace, row.code) },
+    qr: {
+      svg: `${origin}/_/qr/${row.code}.svg?v=${QR_RENDER_VERSION}`,
+      png: `${origin}/_/qr/${row.code}.png?v=${QR_RENDER_VERSION}`,
+      payload: shortPayload(row.namespace, row.code),
+    },
   }
 }
 

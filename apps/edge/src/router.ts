@@ -6,7 +6,7 @@ import { lookupLink } from './lib/lookup.js'
 import { noStoreHeaders, persistClick, strictLogging, unavailable } from './lib/log.js'
 import { checkRateLimit } from './lib/ratelimit.js'
 import { respondForOutcome } from './lib/respond.js'
-import { parseQrOptions, qrPng, qrSvg, shortPayload } from './lib/qr.js'
+import { parseQrOptions, QR_RENDER_VERSION, qrPng, qrSvg, shortPayload } from './lib/qr.js'
 import { health } from './lib/health.js'
 
 export type ApiHandler = (req: Request, env: Env, ctx: ExecutionContext) => Promise<Response> | Response
@@ -24,7 +24,7 @@ export async function handleRequest(
 
   // ── Not logged: QR images (an image is not an access) ──
   const qr = QR_RE.exec(path)
-  if (qr) return qrResponse(url, qr[1]!, qr[2]!.toLowerCase() as 'svg' | 'png')
+  if (qr) return qrResponse(url, qr[1]!, qr[2]!.toLowerCase() as 'svg' | 'png', ctx)
 
   let domains: DomainRow[]
   try {
@@ -122,19 +122,36 @@ function codeForLog(path: string): string {
   return safeDecode(path.replace(/^\/+/, '')).slice(0, 64)
 }
 
-async function qrResponse(url: URL, rawCode: string, fmt: 'svg' | 'png'): Promise<Response> {
+/**
+ * QR images: public, immutable, and cached in Cloudflare's edge cache (Worker responses are
+ * not cached automatically). The cache key is a canonical URL built from the parsed options,
+ * so equivalent requests share one entry; QR_RENDER_VERSION in the key retires old renders.
+ */
+async function qrResponse(url: URL, rawCode: string, fmt: 'svg' | 'png', ctx: ExecutionContext): Promise<Response> {
   const code = readCode(safeDecode(rawCode))
   if (!code) return new Response('Bad code', { status: 400, headers: noStoreHeaders() })
-  const payload = shortPayload(url.hostname, code)
+  const host = url.hostname.toLowerCase()
   const opts = parseQrOptions(url.searchParams)
+  const key = new Request(
+    `https://${host}/_/qr/${code}.${fmt}?` +
+      new URLSearchParams({ size: String(opts.size), ecc: opts.ecc, margin: String(opts.margin), fg: opts.fg.slice(1), bg: opts.bg.slice(1), r: QR_RENDER_VERSION }),
+  )
+  const cache = typeof caches !== 'undefined' ? (caches as unknown as { default: Cache }).default : null
+  const hit = await cache?.match(key).catch(() => undefined)
+  if (hit) return hit
+
+  const payload = shortPayload(host, code)
   const headers = {
     'Cache-Control': 'public, max-age=31536000, immutable',
     'Access-Control-Allow-Origin': '*',
+    'X-Content-Type-Options': 'nosniff',
   }
-  if (fmt === 'svg') {
-    return new Response(qrSvg(payload, opts), { headers: { ...headers, 'Content-Type': 'image/svg+xml' } })
-  }
-  return new Response(await qrPng(payload, opts), { headers: { ...headers, 'Content-Type': 'image/png' } })
+  const res =
+    fmt === 'svg'
+      ? new Response(qrSvg(payload, opts), { headers: { ...headers, 'Content-Type': 'image/svg+xml; charset=utf-8' } })
+      : new Response(await qrPng(payload, opts), { headers: { ...headers, 'Content-Type': 'image/png' } })
+  if (cache) ctx.waitUntil(cache.put(key, res.clone()).catch(() => {}))
+  return res
 }
 
 async function adminAssets(req: Request, env: Env): Promise<Response> {

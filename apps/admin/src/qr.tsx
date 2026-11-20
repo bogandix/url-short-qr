@@ -1,6 +1,6 @@
 import { useState } from 'preact/hooks'
 import { api, type Link } from './api'
-import { Card, ErrorBox, useAsync } from './ui'
+import { Card, ErrorBox, QR_VERSION, useAsync } from './ui'
 
 /** QR generator: pick a link, style it, preview and download. Images come from the link's own host. */
 export function QrGenerator({ ns, code }: { ns?: string; code?: string }) {
@@ -12,7 +12,7 @@ export function QrGenerator({ ns, code }: { ns?: string; code?: string }) {
     const v = (e.currentTarget as HTMLInputElement).value
     setO({ ...o, [k]: k === 'size' || k === 'margin' ? Number(v) : v })
   }
-  const params = new URLSearchParams({ size: String(o.size), ecc: o.ecc, margin: String(o.margin), fg: o.fg.slice(1), bg: o.bg.slice(1) })
+  const params = new URLSearchParams({ size: String(o.size), ecc: o.ecc, margin: String(o.margin), fg: o.fg.slice(1), bg: o.bg.slice(1), v: QR_VERSION })
   const base = picked ? `https://${picked.namespace}/_/qr/${picked.code}` : ''
   const shortUrl = picked ? `HTTPS://${picked.namespace.toUpperCase()}/${picked.code.toUpperCase()}` : ''
   const lowContrast = contrast(o.fg, o.bg) < 4

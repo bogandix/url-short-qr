@@ -91,3 +91,14 @@ export function Top({ title, counts }: { title: string; counts: Record<string, n
     </div>
   )
 }
+
+/** Matches QR_RENDER_VERSION in the Worker; changing it makes browsers fetch fresh QR images. */
+export const QR_VERSION = '2'
+
+/** Add/replace query parameters on an absolute URL (keeps any existing ones, e.g. v=2). */
+export function withQuery(url: string, params: Record<string, string | number>): string {
+  const u = new URL(url, location.origin)
+  for (const [k, v] of Object.entries(params)) u.searchParams.set(k, String(v))
+  if (!u.searchParams.has('v')) u.searchParams.set('v', QR_VERSION)
+  return u.toString()
+}

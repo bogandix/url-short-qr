@@ -1,4 +1,4 @@
-import { encode, renderSVG, type QrCodeGenerateOptions } from 'uqr'
+import { encode } from 'uqr'
 
 export type Ecc = 'L' | 'M' | 'Q' | 'H'
 
@@ -30,16 +30,36 @@ function clampInt(v: string | null, min: number, max: number, def: number): numb
 /** Uppercase payload keeps the QR in alphanumeric mode (smallest symbol). */
 export { shortUrl as shortPayload } from '@shortener/shared'
 
+/**
+ * Bump when the rendered output changes: QR URLs carry `v=<this>` so browsers that cached
+ * an older image (served immutable for a year) fetch the new one.
+ */
+export const QR_RENDER_VERSION = '2'
+
+/**
+ * SVG rendered directly from the module matrix: one root element with a single viewBox
+ * (in modules) and width/height (in px), dark modules merged into horizontal runs.
+ */
 export function qrSvg(payload: string, opts: Partial<QrOptions> = {}): string {
   const o = { size: 512, ecc: 'M' as Ecc, margin: 4, fg: '#000000', bg: '#ffffff', ...opts }
-  const genOpts: QrCodeGenerateOptions = { ecc: o.ecc, border: o.margin }
-  const { size: modules } = encode(payload, genOpts)
-  const svg = renderSVG(payload, { ...genOpts, pixelSize: 1, blackColor: o.fg, whiteColor: o.bg })
-  // Scale the symbol to the requested pixel size; keep crisp edges.
-  return svg.replace(
-    /^<svg([^>]*)>/,
-    (_m, attrs: string) =>
-      `<svg${attrs.replace(/\swidth="[^"]*"/, '').replace(/\sheight="[^"]*"/, '')} width="${o.size}" height="${o.size}" viewBox="0 0 ${modules} ${modules}" shape-rendering="crispEdges">`,
+  const { data, size: n } = encode(payload, { ecc: o.ecc, border: o.margin })
+  let d = ''
+  for (let y = 0; y < n; y++) {
+    const row = data[y]!
+    for (let x = 0; x < n; ) {
+      if (!row[x]) {
+        x++
+        continue
+      }
+      let w = 1
+      while (x + w < n && row[x + w]) w++
+      d += `M${x} ${y}h${w}v1h-${w}z`
+      x += w
+    }
+  }
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${o.size}" height="${o.size}" viewBox="0 0 ${n} ${n}" shape-rendering="crispEdges">` +
+    `<rect width="${n}" height="${n}" fill="${o.bg}"/><path fill="${o.fg}" d="${d}"/></svg>`
   )
 }
 

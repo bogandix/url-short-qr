@@ -130,7 +130,7 @@ describe('admin host and QR', () => {
   it('QR svg/png are edge-cacheable and not logged', async () => {
     const { env, ae } = makeEnv(domains, links)
     const svg = await handleRequest(req('https://short.example/_/qr/a7k2.svg?size=256'), env, ctx, api)
-    expect(svg.headers.get('content-type')).toBe('image/svg+xml')
+    expect(svg.headers.get('content-type')).toBe('image/svg+xml; charset=utf-8')
     expect(svg.headers.get('cache-control')).toBe('public, max-age=31536000, immutable')
     expect(await svg.text()).toContain('<svg')
     const png = await handleRequest(req('https://short.example/_/qr/A7K2.png'), env, ctx, api)
