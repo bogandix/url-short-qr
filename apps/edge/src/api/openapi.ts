@@ -33,7 +33,8 @@ export function openapi(server: string) {
           properties: {
             namespace: { type: 'string', description: 'Host the short link lives on (apex or namespace-mode subdomain)', example: 'vv1.eu' },
             target_url: { type: 'string', format: 'uri', example: 'https://vrumvrum.ro/anunt/123' },
-            code: { type: 'string', description: 'Vanity code, 2–32 of 0-9 A-Z and "-"; normalized (O→0, I/L→1). Omit for a random code.' },
+            code: { type: 'string', description: 'Vanity code, 1–32 of 0-9 A-Z and "-"; normalized (O→0, I/L→1). Omit for a random code.' },
+            code_length: { type: 'integer', minimum: 1, maximum: 8, description: 'Random code length (characters after the /). Exact when given (409 code_length_exhausted when that length is full); omitted = domain default (4), which grows automatically. 33^n codes: 1→33, 2→1,089, 3→35,937, 4→1.19M, 5→39M, 6→1.29B.' },
             title: { type: 'string' },
             tags: { type: 'array', items: { type: 'string' } },
             owner: { type: 'string', description: 'Free-form tenant key, e.g. "vrumvrum:garage:42"' },

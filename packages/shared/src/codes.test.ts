@@ -9,9 +9,13 @@ describe('readCode', () => {
     expect(readCode('ABC/')).toBe('ABC')
   })
 
+  it('accepts one-character codes', () => {
+    expect(readCode('a')).toBe('A')
+    expect(readCode('o')).toBe('0')
+  })
+
   it('rejects reserved and invalid', () => {
     expect(readCode('robots.txt')).toBeNull()
-    expect(readCode('a')).toBeNull()
     expect(readCode('_/api')).toBeNull()
   })
 })

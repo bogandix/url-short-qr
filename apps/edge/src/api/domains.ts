@@ -17,7 +17,7 @@ const DomainInput = z.object({
   wildcard_mode: z.enum(['namespace', 'alias']).default('namespace'),
   home_url: url.nullable().optional(),
   not_found_url: url.nullable().optional(),
-  code_length: z.number().int().min(2).max(12).default(4),
+  code_length: z.number().int().min(1).max(8).default(4),
   is_admin_host: z.boolean().default(false),
   registrar: z.string().max(32).nullable().optional(),
   zone_id: z.string().max(64).nullable().optional(),

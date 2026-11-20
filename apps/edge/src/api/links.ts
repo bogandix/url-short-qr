@@ -1,6 +1,10 @@
 import { z } from 'zod'
 import {
+  CODE_ALPHABET,
   generateCode,
+  MAX_CODE_LENGTH,
+  MIN_CODE_LENGTH,
+  spaceAtLength,
   isValidVanity,
   kvKey,
   pickCodeLength,
@@ -32,6 +36,8 @@ const LinkInput = z.object({
   namespace: z.string().min(1).max(253).transform((s) => s.toLowerCase()),
   target_url: httpUrl,
   code: z.string().max(64).optional(),
+  /** Random code length (characters after the /), 1–8. Exact when given; omitted = domain default (4), which grows when half full. */
+  code_length: z.number().int().min(MIN_CODE_LENGTH).max(MAX_CODE_LENGTH).optional(),
   title: z.string().max(500).optional(),
   tags: z.array(z.string().max(64)).max(50).optional(),
   owner: z.string().max(200).optional(),
@@ -125,6 +131,7 @@ async function createOne(sql: Sql, c: Ctx, input: LinkInput, domains: DomainRow[
   const auth = c.get('auth')
   const domain = domainFor(input.namespace, domains)
   if (!canAccess(auth, input.namespace, input.owner)) throw new ApiError(403, 'namespace_or_owner_not_allowed')
+  if (input.code && input.code_length) throw new ApiError(400, 'code_and_code_length', 'give a vanity code or a length, not both')
 
   if (input.external_id) {
     const prior = await sql<LinkRow[]>`
@@ -155,17 +162,39 @@ async function createOne(sql: Sql, c: Ctx, input: LinkInput, domains: DomainRow[
     return rows[0]
   }
 
-  const len = await pickCodeLength(domain.code_length, async (l) => {
+  const used = async (l: number) => {
     const r = await sql<{ n: string }[]>`
       select count(*)::text as n from shortener.links where namespace = ${input.namespace} and length(code) = ${l}`
     return Number(r[0]!.n)
-  })
+  }
+  const exact = input.code_length !== undefined
+  const len = exact ? input.code_length! : await pickCodeLength(domain.code_length, used)
+  const random = () => generateCode(len, (n) => crypto.getRandomValues(new Uint8Array(n)))
+
   for (let attempt = 0; attempt < 12; attempt++) {
-    const candidate = generateCode(len, (n) => crypto.getRandomValues(new Uint8Array(n)))
-    const rows = await insert(candidate)
+    const rows = await insert(random())
     if (rows[0]) return rows[0]
   }
+  // Small spaces (1–2 characters: 33 or 1,089 codes) can be nearly full: pick from what is left.
+  if (spaceAtLength(len) <= 1089) {
+    const taken = new Set(
+      (await sql<{ code: string }[]>`select code from shortener.links where namespace = ${input.namespace} and length(code) = ${len}`).map((r) => r.code),
+    )
+    const free = allCodes(len).filter((c) => !taken.has(c))
+    while (free.length) {
+      const i = crypto.getRandomValues(new Uint32Array(1))[0]! % free.length
+      const rows = await insert(free.splice(i, 1)[0]!)
+      if (rows[0]) return rows[0]
+    }
+  }
+  if (exact) throw new ApiError(409, 'code_length_exhausted', `no free ${len}-character codes left on ${input.namespace}`)
   throw new ApiError(507, 'code_space_exhausted')
+}
+
+function allCodes(len: number): string[] {
+  let out = ['']
+  for (let i = 0; i < len; i++) out = out.flatMap((p) => [...CODE_ALPHABET].map((ch) => p + ch))
+  return out
 }
 
 async function audit(sql: Sql, actor: string, action: string, row: Pick<LinkRow, 'namespace' | 'code'>, before: unknown, after: unknown) {

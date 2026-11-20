@@ -68,6 +68,11 @@ export function Login() {
   )
 }
 
+const capacity = (n: number) => {
+  const c = 33 ** n
+  return c >= 1e9 ? `${(c / 1e9).toFixed(c >= 1e10 ? 0 : 1)}B` : c >= 1e6 ? `${(c / 1e6).toFixed(c >= 1e7 ? 0 : 1)}M` : c.toLocaleString('en')
+}
+
 // ───────────── Temporary password → new password ─────────────
 export function ChangePassword() {
   const [cur, setCur] = useState('')
@@ -165,17 +170,19 @@ export function Links() {
 // ───────────── New link ─────────────
 export function NewLink() {
   const domains = useAsync(() => api<{ items: Domain[] }>('/domains'), [])
-  const [v, setV] = useState({ namespace: '', target_url: '', code: '', title: '', tags: '', owner: '', expires_at: '', fallback_url: '' })
+  const [v, setV] = useState({ namespace: '', target_url: '', code: '', code_length: '', title: '', tags: '', owner: '', expires_at: '', fallback_url: '' })
   const [created, setCreated] = useState<Link>()
   const [err, setErr] = useState<Error>()
   const set = (k: keyof typeof v) => (e: Event) => setV({ ...v, [k]: (e.currentTarget as HTMLInputElement).value })
   const ns = v.namespace || domains.data?.items.find((d) => d.status !== 'disabled')?.apex || ''
+  const domainLen = domains.data?.items.find((d) => d.apex === ns)?.code_length ?? 4
   const submit = async (e: Event) => {
     e.preventDefault()
     setErr(undefined)
     try {
       const body: Record<string, unknown> = { namespace: ns, target_url: v.target_url }
       if (v.code) body.code = v.code
+      else if (v.code_length) body.code_length = Number(v.code_length)
       if (v.title) body.title = v.title
       if (v.owner) body.owner = v.owner
       if (v.fallback_url) body.fallback_url = v.fallback_url
@@ -195,7 +202,16 @@ export function NewLink() {
           <datalist id="ns">{domains.data?.items.map((d) => <option key={d.id} value={d.apex} />)}</datalist>
         </label>
         <label>Target URL<input type="url" required placeholder="https://…" value={v.target_url} onInput={set('target_url')} /></label>
-        <label>Code (optional)<input placeholder="random" value={v.code} onInput={set('code')} pattern="[0-9A-Za-z\-]{2,32}" /></label>
+        <label>Code (optional)<input placeholder="random" value={v.code} onInput={set('code')} pattern="[0-9A-Za-z\-]{1,32}" /></label>
+        <label>Random code length
+          <select value={v.code_length} onChange={set('code_length')} disabled={!!v.code}>
+            <option value="">Default ({domainLen})</option>
+            {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
+              <option key={n} value={n}>{n} {n === 1 ? 'character' : 'characters'} · {capacity(n)} codes</option>
+            ))}
+          </select>
+          <span class="muted small">{v.code ? 'Not used with a vanity code.' : `e.g. ${ns.toUpperCase()}/${'A7K2M9QX'.slice(0, Number(v.code_length || domainLen))}`}</span>
+        </label>
         <label>Title<input value={v.title} onInput={set('title')} /></label>
         <label>Tags (comma-separated)<input value={v.tags} onInput={set('tags')} /></label>
         <label>Owner<input placeholder="tenant:42" value={v.owner} onInput={set('owner')} /></label>
@@ -387,7 +403,7 @@ export function Domains() {
       <ErrorBox error={list.error ?? err} />
       <div class="tablewrap">
         <table>
-          <thead><tr><th>Apex</th><th>Status</th><th>www</th><th>Wildcard</th><th>Home URL</th><th>Code length</th></tr></thead>
+          <thead><tr><th>Apex</th><th>Status</th><th>www</th><th>Wildcard</th><th>Home URL</th><th>Default code length</th></tr></thead>
           <tbody>
             {list.data?.items.map((d) => (
               <tr key={d.id}>
@@ -410,7 +426,11 @@ export function Domains() {
                     onChange={(e) => patch(d, { home_url: e.currentTarget.value || null })}
                   />
                 </td>
-                <td>{d.code_length}</td>
+                <td>
+                  <select value={d.code_length} onChange={(e) => patch(d, { code_length: Number(e.currentTarget.value) })} aria-label="Default code length">
+                    {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </td>
               </tr>
             ))}
           </tbody>

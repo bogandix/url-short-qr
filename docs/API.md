@@ -50,6 +50,20 @@ Response (`201`):
 }
 ```
 
+Code length: add `"code_length": 1…8` to get exactly that many random characters after the
+`/` (`HTTPS://VV1.EU/7` … `HTTPS://VV1.EU/A7K2M9QX`). Without it you get the domain default (4),
+which grows by one character automatically when half of that length is used. With an explicit
+length, a full length returns `409 code_length_exhausted` instead of growing.
+
+| length | codes per domain |
+|---|---|
+| 1 | 33 |
+| 2 | 1,089 |
+| 3 | 35,937 |
+| 4 (default) | 1.19 M |
+| 5 | 39 M |
+| 6–8 | 1.3 B – 1.4 T |
+
 Up to 500 at once, all or nothing: `POST /links/bulk` with `{ "items": [ … ] }`.
 
 ## 3. Show the QR code

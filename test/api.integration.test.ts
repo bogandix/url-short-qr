@@ -144,6 +144,31 @@ describe('links API', () => {
     expect(r.body).toMatchObject({ error: 'invalid_value', detail: 'tmp_no_zzz' })
   })
 
+  it('code_length gives exactly that many random characters (1–8)', async () => {
+    for (const n of [1, 2, 3, 5, 8]) {
+      const r = await call<{ code: string; short_url: string }>('POST', '/links', { namespace: 'acme.tenant.example', target_url: 'https://len.example', code_length: n })
+      expect(r.status).toBe(201)
+      expect(r.body.code).toHaveLength(n)
+    }
+    expect((await call('POST', '/links', { namespace: 'short.example', target_url: 'https://x.example', code_length: 0 })).status).toBe(400)
+    expect((await call('POST', '/links', { namespace: 'short.example', target_url: 'https://x.example', code_length: 9 })).status).toBe(400)
+    expect((await call('POST', '/links', { namespace: 'short.example', target_url: 'https://x.example', code: 'AB', code_length: 2 })).status).toBe(400)
+  })
+
+  it('an exact length that is full returns 409 instead of growing', async () => {
+    const ns = 'full.tenant.example'
+    const codes = new Set<string>()
+    for (let i = 0; i < 33; i++) {
+      const r = await call<{ code: string }>('POST', '/links', { namespace: ns, target_url: 'https://full.example', code_length: 1 })
+      expect(r.status).toBe(201)
+      codes.add(r.body.code)
+    }
+    expect(codes.size).toBe(33) // every 1-character code, no duplicates
+    const r = await call<{ error: string }>('POST', '/links', { namespace: ns, target_url: 'https://full.example', code_length: 1 })
+    expect(r.status).toBe(409)
+    expect(r.body.error).toBe('code_length_exhausted')
+  }, 120_000)
+
   it('rejects unknown namespaces, bad URLs and reserved codes', async () => {
     expect((await call('POST', '/links', { namespace: 'nope.example', target_url: 'https://x.example' })).status).toBe(400)
     expect((await call('POST', '/links', { namespace: 'short.example', target_url: 'javascript:alert(1)' })).status).toBe(400)
