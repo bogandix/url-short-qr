@@ -14,7 +14,7 @@ export function QrGenerator({ ns, code }: { ns?: string; code?: string }) {
   }
   const params = new URLSearchParams({ size: String(o.size), ecc: o.ecc, margin: String(o.margin), fg: o.fg.slice(1), bg: o.bg.slice(1) })
   const base = picked ? `https://${picked.namespace}/_/qr/${picked.code}` : ''
-  const shortUrl = picked ? `https://${picked.namespace}/${picked.code}` : ''
+  const shortUrl = picked ? `HTTPS://${picked.namespace.toUpperCase()}/${picked.code.toUpperCase()}` : ''
   const lowContrast = contrast(o.fg, o.bg) < 4
 
   return (
@@ -68,13 +68,12 @@ export function QrGenerator({ ns, code }: { ns?: string; code?: string }) {
             </div>
             <div class="grid">
               <p class="big">{shortUrl}</p>
-              <code class="muted small">{`HTTPS://${picked.namespace.toUpperCase()}/${picked.code}`}</code>
               <div class="row">
                 <a class="button" href={`${base}.svg?${params}`} download={`${picked.code}.svg`} target="_blank" rel="noreferrer">Download SVG</a>
                 <a class="button ghost" href={`${base}.png?${params}`} download={`${picked.code}.png`} target="_blank" rel="noreferrer">Download PNG</a>
                 <button class="ghost" onClick={() => navigator.clipboard.writeText(`${base}.svg?${params}`)}>Copy image URL</button>
               </div>
-              <p class="muted small">The QR encodes the uppercase short URL (alphanumeric mode = smallest code). Image URLs are public and cached; scans are logged as clicks.</p>
+              <p class="muted small">Short URLs are all capitals: QR alphanumeric mode, the smallest symbol. Image URLs are public and cached; scans are logged as clicks.</p>
             </div>
           </div>
         )}

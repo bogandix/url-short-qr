@@ -1,4 +1,4 @@
-import { readCode, resolveHost, type ClickOutcome, type DomainRow, type KvLinkValue } from '@shortener/shared'
+import { readCode, resolveHost, shortUrl, type ClickOutcome, type DomainRow, type KvLinkValue } from '@shortener/shared'
 import type { Env } from './env.js'
 import { buildEvent } from './lib/event.js'
 import { loadDomains } from './lib/domains.js'
@@ -98,7 +98,7 @@ export async function handleRequest(
   return respondForOutcome(outcome, link, {
     homeUrl: domain?.home_url,
     notFoundUrl: res.kind === 'ok' ? domain?.not_found_url : null,
-    shortUrl: `https://${url.hostname.toLowerCase()}/${code}`,
+    shortUrl: shortUrl(url.hostname, code),
   })
 }
 

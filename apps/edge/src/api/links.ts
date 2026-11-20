@@ -6,6 +6,7 @@ import {
   pickCodeLength,
   readCode,
   resolveHost,
+  shortUrl,
   type DomainRow,
 } from '@shortener/shared'
 import { canAccess } from '../lib/auth.js'
@@ -102,7 +103,7 @@ function present(row: LinkRow) {
   const origin = `https://${row.namespace}`
   return {
     ...row,
-    short_url: `${origin}/${row.code}`,
+    short_url: shortUrl(row.namespace, row.code),
     qr: { svg: `${origin}/_/qr/${row.code}.svg`, png: `${origin}/_/qr/${row.code}.png`, payload: shortPayload(row.namespace, row.code) },
   }
 }

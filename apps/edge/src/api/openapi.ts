@@ -55,7 +55,7 @@ export function openapi(server: string) {
                 code: { type: 'string' },
                 status: { enum: ['active', 'paused', 'archived'] },
                 version: { type: 'integer' },
-                short_url: { type: 'string', example: 'https://vv1.eu/A7K2' },
+                short_url: { type: 'string', example: 'HTTPS://VV1.EU/A7K2', description: 'All capitals on purpose: smallest QR symbol (alphanumeric mode). Works as typed.' },
                 qr: { type: 'object', properties: { svg: { type: 'string' }, png: { type: 'string' }, payload: { type: 'string' } } },
                 existed: { type: 'boolean' },
                 created_at: { type: 'string', format: 'date-time' },

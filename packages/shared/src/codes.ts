@@ -58,3 +58,12 @@ export function allCharsValid(code: string): boolean {
   }
   return true
 }
+
+/**
+ * The canonical short URL, all capitals: HTTPS://VV1.EU/A7K2. Scheme and host are
+ * case-insensitive and codes are read case-insensitively, so it works as typed, and
+ * it keeps QR codes in alphanumeric mode (one version smaller than mixed case).
+ */
+export function shortUrl(host: string, code: string): string {
+  return `HTTPS://${host.toUpperCase()}/${code.toUpperCase()}`
+}

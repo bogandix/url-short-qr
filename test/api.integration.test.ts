@@ -106,7 +106,7 @@ describe('links API', () => {
     expect(r.status).toBe(201)
     expect(r.body.code).toMatch(/^[0-9A-HJKMNP-Z]{4}$/)
     code = r.body.code
-    expect(r.body.short_url).toBe(`https://short.example/${code}`)
+    expect(r.body.short_url).toBe(`HTTPS://SHORT.EXAMPLE/${code}`)
     expect(r.body.qr.payload).toBe(`HTTPS://SHORT.EXAMPLE/${code}`)
     expect(r.headers.get('cache-control')).toContain('no-store')
     const v = JSON.parse(kv.map.get(`short.example/${code}`)!)

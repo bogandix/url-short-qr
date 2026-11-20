@@ -43,7 +43,7 @@ Response (`201`):
 ```json
 {
   "id": "…", "namespace": "vv1.eu", "code": "A7K2",
-  "short_url": "https://vv1.eu/A7K2",
+  "short_url": "HTTPS://VV1.EU/A7K2",
   "qr": { "svg": "https://vv1.eu/_/qr/A7K2.svg", "png": "https://vv1.eu/_/qr/A7K2.png", "payload": "HTTPS://VV1.EU/A7K2" },
   "owner": "vrumvrum:garage:42", "external_id": "listing:123", "metadata": { "listing_id": 123, "garage_id": 42 },
   "status": "active", "version": 1
@@ -53,6 +53,10 @@ Response (`201`):
 Up to 500 at once, all or nothing: `POST /links/bulk` with `{ "items": [ … ] }`.
 
 ## 3. Show the QR code
+
+`short_url` is all capitals on purpose: QR codes then use alphanumeric mode, one version
+smaller than mixed case (21×21 instead of 25×25 at ECC M). Keep it uppercase if you print it
+or generate your own QR from it; it opens the same link however it is typed.
 
 The QR URLs are public and edge-cached, so they can go straight into an `<img>` or a PDF:
 

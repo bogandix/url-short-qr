@@ -28,9 +28,7 @@ function clampInt(v: string | null, min: number, max: number, def: number): numb
 }
 
 /** Uppercase payload keeps the QR in alphanumeric mode (smallest symbol). */
-export function shortPayload(host: string, code: string): string {
-  return `HTTPS://${host.toUpperCase()}/${code.toUpperCase()}`
-}
+export { shortUrl as shortPayload } from '@shortener/shared'
 
 export function qrSvg(payload: string, opts: Partial<QrOptions> = {}): string {
   const o = { size: 512, ecc: 'M' as Ecc, margin: 4, fg: '#000000', bg: '#ffffff', ...opts }
