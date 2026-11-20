@@ -23,3 +23,30 @@ export function scope(s: string): MiddlewareHandler<AppEnv> {
     await next()
   }
 }
+
+type PgError = { code?: string; message?: string; detail?: string; constraint_name?: string; column_name?: string }
+
+/** Postgres errors that are the caller's fault → 400/409 with a reason instead of a bare 500. */
+export function pgErrorResponse(err: unknown): { status: 400 | 409; body: { error: string; detail?: string } } | null {
+  const e = err as PgError
+  if (!e || typeof e.code !== 'string') return null
+  if (e.code === '23505') return { status: 409, body: { error: 'conflict', detail: e.constraint_name } }
+  if (e.code === '23514') return { status: 400, body: { error: 'invalid_value', detail: e.constraint_name } }
+  if (e.code === '23502') return { status: 400, body: { error: 'missing_value', detail: e.column_name } }
+  if (e.code.startsWith('22')) return { status: 400, body: { error: 'invalid_value', detail: e.message } }
+  return null
+}
+
+/** One log line with what Postgres actually said (postgres.js keeps it out of the stack). */
+export function describeError(err: unknown): Record<string, unknown> {
+  const e = err as PgError & { name?: string; stack?: string; severity?: string; routine?: string }
+  return {
+    name: e?.name,
+    message: e?.message,
+    code: e?.code,
+    detail: e?.detail,
+    constraint: e?.constraint_name,
+    column: e?.column_name,
+    stack: e?.stack?.split('\n').slice(0, 6).join(' | '),
+  }
+}

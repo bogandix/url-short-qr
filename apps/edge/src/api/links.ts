@@ -14,12 +14,19 @@ import { adminSqlClient, pgArray, withSql, type Sql } from '../lib/db.js'
 import { loadDomains } from '../lib/domains.js'
 import { linkToKv } from '../lib/lookup.js'
 import { QR_RENDER_VERSION, shortPayload } from '../lib/qr.js'
-import { authed, newApi, scope, type Ctx } from './app.js'
+import { authed, newApi, pgErrorResponse, scope, type Ctx } from './app.js'
 
 export const linksApi = newApi()
 linksApi.use('*', authed)
 
-const httpUrl = z.string().url().max(4096).regex(/^https?:\/\//i, 'must be http(s)')
+/** http(s) URL; the scheme is stored lowercase (HTTPS://X → https://X) — the rest is kept as given. */
+const httpUrl = z
+  .string()
+  .trim()
+  .url()
+  .max(4096)
+  .regex(/^https?:\/\//i, 'must be http(s)')
+  .transform((u) => u.replace(/^https?:/i, (s) => s.toLowerCase()))
 
 const LinkInput = z.object({
   namespace: z.string().min(1).max(253).transform((s) => s.toLowerCase()),
@@ -89,6 +96,8 @@ function fail(c: Ctx, err: unknown) {
   if (err instanceof ApiError) return c.json({ error: err.code, detail: err.detail }, err.status)
   if (err instanceof z.ZodError) return c.json({ error: 'invalid_body', detail: err.flatten() }, 400)
   if (err instanceof SyntaxError) return c.json({ error: 'invalid_json' }, 400)
+  const pg = pgErrorResponse(err)
+  if (pg) return c.json(pg.body, pg.status)
   throw err
 }
 

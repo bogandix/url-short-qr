@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import type { AppEnv } from './app.js'
+import { describeError, pgErrorResponse, type AppEnv } from './app.js'
 import { authApi } from './auth.js'
 import { domainsApi } from './domains.js'
 import { keysApi } from './keys.js'
@@ -37,6 +37,8 @@ api.route('/ops', opsApi)
 
 api.notFound((c) => c.json({ error: 'not_found' }, 404))
 api.onError((err, c) => {
-  console.error('api-error', err)
+  const pg = pgErrorResponse(err)
+  console.error('api-error', JSON.stringify({ method: c.req.method, path: new URL(c.req.url).pathname, ...describeError(err) }))
+  if (pg) return c.json(pg.body, pg.status)
   return c.json({ error: 'internal' }, 500)
 })

@@ -125,6 +125,25 @@ describe('links API', () => {
     expect(other.status).toBe(201)
   })
 
+  it('accepts an uppercase scheme (e.g. a pasted short URL) and stores it lowercase', async () => {
+    const r = await call<{ target_url: string; fallback_url: string }>('POST', '/links', {
+      namespace: 'short.example',
+      target_url: 'HTTPS://VV1.EU/VHTV',
+      fallback_url: 'Https://Example.com/Path',
+    })
+    expect(r.status).toBe(201)
+    expect(r.body.target_url).toBe('https://VV1.EU/VHTV')
+    expect(r.body.fallback_url).toBe('https://Example.com/Path')
+  })
+
+  it('database constraint errors become 4xx with a reason, not 500', async () => {
+    await pg.exec(`alter table shortener.links add constraint tmp_no_zzz check (title is distinct from 'zzz')`)
+    const r = await call<{ error: string; detail: string }>('POST', '/links', { namespace: 'short.example', target_url: 'https://x.example', title: 'zzz' })
+    await pg.exec(`alter table shortener.links drop constraint tmp_no_zzz`)
+    expect(r.status).toBe(400)
+    expect(r.body).toMatchObject({ error: 'invalid_value', detail: 'tmp_no_zzz' })
+  })
+
   it('rejects unknown namespaces, bad URLs and reserved codes', async () => {
     expect((await call('POST', '/links', { namespace: 'nope.example', target_url: 'https://x.example' })).status).toBe(400)
     expect((await call('POST', '/links', { namespace: 'short.example', target_url: 'javascript:alert(1)' })).status).toBe(400)
