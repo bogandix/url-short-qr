@@ -10,7 +10,7 @@ reconcile against Analytics Engine proves it.
 - admin API, admin UI (`/_/admin`) and CLI
 - **free mode** (free tiers, ~100k requests/day) or **paid mode** (Workers Paid, adds a queue)
 
-The full specification is in `../URL-SHORTENER.md`.
+The full specification is in [docs/SPEC.md](docs/SPEC.md).
 
 ## Requirements
 
