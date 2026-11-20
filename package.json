@@ -23,7 +23,8 @@
     "deploy": "npm run build && wrangler deploy -c apps/edge/wrangler.jsonc",
     "test:integration": "vitest run -c vitest.integration.config.ts",
     "migrate": "tsx scripts/migrate.ts",
-    "config:placeholder": "tsx scripts/gen-config.ts"
+    "config:placeholder": "tsx scripts/gen-config.ts",
+    "deploy:cf": "npm run migrate --if-present && wrangler deploy -c apps/edge/wrangler.jsonc && (grep -q '\"MODE\": \"paid\"' apps/edge/wrangler.jsonc && wrangler deploy -c apps/consumer/wrangler.jsonc || true)"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.17",

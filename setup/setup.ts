@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import { databaseFor, DATABASE_REGIONS, type Database } from './databases/index.js'
 import { parsePgUrl } from './databases/types.js'
 import { addDomain, promptDomain } from './domain.js'
@@ -13,12 +14,15 @@ import { deployAll, putSecret, wrangler, writeConfigs, type WranglerAuth } from 
 function preflightTools() {
   const [maj, min] = process.versions.node.split('.').map(Number) as [number, number]
   if (maj < 22 || (maj === 22 && min < 12)) throw new Error(`Node ${process.versions.node}: wrangler needs Node >= 22.12`)
-  for (const [cmd, args] of [['git', ['--version']], ['npx', ['--no-install', 'wrangler', '--version']]] as const) {
-    try {
-      execFileSync(cmd, args, { stdio: 'ignore' })
-    } catch {
-      throw new Error(`${cmd} not available${cmd === 'npx' ? ' (run npm install first)' : ''}`)
-    }
+  try {
+    execFileSync('git', ['--version'], { stdio: 'ignore' })
+  } catch {
+    throw new Error('git not available')
+  }
+  try {
+    createRequire(import.meta.url).resolve('wrangler/bin/wrangler.js')
+  } catch {
+    throw new Error('wrangler not installed (run npm install first)')
   }
 }
 
@@ -141,7 +145,7 @@ export async function runSetup() {
     await task('SECRET_SALT', () => putSecret('SECRET_SALT', sec.salt!, auth))
     const ae = await analyticsToken()
     await task('CF_ANALYTICS_TOKEN', () => putSecret('CF_ANALYTICS_TOKEN', ae, auth))
-    const hook = await ask('Alert webhook URL for reconcile differences (Slack/Discord/any; blank = none)', { placeholder: 'https://hooks.slack.com/…' })
+    const hook = await ask('Alert webhook URL for reconcile differences (Slack/Discord/any; blank = none)', { placeholder: 'https://hooks.slack.com/…', env: 'ALERT_WEBHOOK_URL', optional: true })
     if (hook) {
       await task('ALERT_WEBHOOK_URL', () => putSecret('ALERT_WEBHOOK_URL', hook, auth))
       s.alertWebhookSet = true
@@ -151,10 +155,14 @@ export async function runSetup() {
 
   // 7 (key first, so step 6 can smoke-test). First admin + API key.
   let apiKey: string | undefined
+  let tempPassword: string | undefined
   if (!s.steps.admin) {
-    const email = (await ask('Admin email (for the admin UI login)', { validate: (v) => (EMAIL_RE.test(v) ? undefined : 'Not an email') })).toLowerCase()
+    const email = (await ask('Admin email (for the admin UI login)', { env: 'SHORTENER_ADMIN_EMAIL', validate: (v) => (EMAIL_RE.test(v) ? undefined : 'Not an email') })).toLowerCase()
     await db.runSql(`insert into shortener.admins (email) values (${lit(email)}) on conflict do nothing`)
-    if (db.ensureAuthUser) await task('Creating login user', () => db.ensureAuthUser!(email))
+    if (db.ensureAuthUser) {
+      tempPassword = randomSecret(12) // must be changed at first sign-in
+      await task('Creating login user', () => db.ensureAuthUser!(email, tempPassword))
+    }
     apiKey = newApiKey()
     await db.runSql(`insert into shortener.api_keys (name, key_hash, scopes)
       values ('setup', ${lit(await sha256Hex(apiKey))}, array['links:read','links:write','stats:read','domains:admin','keys:admin'])`)
@@ -170,10 +178,10 @@ export async function runSetup() {
   markStep(s, 'domain')
 
   // 9. Summary
-  summary(s, apiKey)
+  summary(s, apiKey, tempPassword)
 }
 
-function summary(s: State, apiKey?: string) {
+function summary(s: State, apiKey?: string, tempPassword?: string) {
   const admin = Object.values(s.domains).find((d) => d.isAdminHost)!
   const lines = [
     `Admin UI:   https://${admin.apex}/_/admin`,
@@ -193,6 +201,9 @@ function summary(s: State, apiKey?: string) {
   p.note(lines.join('\n'), 'Done')
   if (apiKey) {
     p.note(`${apiKey}\n\nShown once. Store it in your password manager; it is not saved anywhere.`, 'First API key')
+  }
+  if (tempPassword) {
+    p.note(`${tempPassword}\n\nTemporary admin UI password; you must choose a new one at first sign-in.`, 'Admin password')
   }
   p.outro('Run `npm run doctor` any time to check for drift.')
 }

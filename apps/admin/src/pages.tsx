@@ -1,11 +1,12 @@
 import { useState } from 'preact/hooks'
-import { api, authConfig, sendOtp, setSession, verifyOtp, type Domain, type Link } from './api'
+import { api, authConfig, changePassword, passwordLogin, sendOtp, setSession, verifyOtp, type Domain, type Link } from './api'
 import { Bars, Card, ErrorBox, Status, Top, go, useAsync } from './ui'
 
 // ───────────── Login ─────────────
 export function Login() {
   const cfg = useAsync(authConfig, [])
   const [email, setEmail] = useState('')
+  const [pw, setPw] = useState('')
   const [code, setCode] = useState('')
   const [sent, setSent] = useState(false)
   const [key, setKey] = useState('')
@@ -27,11 +28,20 @@ export function Login() {
     <main class="login">
       <h1>Shortener</h1>
       {cfg.data?.provider === 'supabase' && (
-        <Card title="Sign in with email">
+        <Card title="Sign in">
+          <form onSubmit={run(() => passwordLogin(email.trim(), pw))}>
+            <label>Email<input type="email" required autoComplete="username" value={email} onInput={(e) => setEmail(e.currentTarget.value)} autoFocus /></label>
+            <label>Password<input type="password" required autoComplete="current-password" value={pw} onInput={(e) => setPw(e.currentTarget.value)} /></label>
+            <button disabled={busy}>Sign in</button>
+          </form>
+        </Card>
+      )}
+      {cfg.data?.provider === 'supabase' && (
+        <Card title="Or get a code by email">
           {!sent ? (
             <form onSubmit={run(async () => (await sendOtp(email), setSent(true)))}>
-              <label>Email<input type="email" required value={email} onInput={(e) => setEmail(e.currentTarget.value)} autoFocus /></label>
-              <button disabled={busy}>Send code</button>
+              <label>Email<input type="email" required value={email} onInput={(e) => setEmail(e.currentTarget.value)} /></label>
+              <button class="ghost" disabled={busy}>Send code</button>
             </form>
           ) : (
             <form onSubmit={run(() => verifyOtp(email, code.trim()))}>
@@ -54,6 +64,42 @@ export function Login() {
         </form>
       </Card>
       <ErrorBox error={err ?? cfg.error} />
+    </main>
+  )
+}
+
+// ───────────── Temporary password → new password ─────────────
+export function ChangePassword() {
+  const [a, setA] = useState('')
+  const [b, setB] = useState('')
+  const [err, setErr] = useState<Error>()
+  const [busy, setBusy] = useState(false)
+  const weak = a.length < 12
+  const submit = async (e: Event) => {
+    e.preventDefault()
+    setErr(undefined)
+    if (a !== b) return setErr(new Error('Passwords do not match'))
+    setBusy(true)
+    try {
+      await changePassword(a)
+    } catch (x) {
+      setErr(x as Error)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <main class="login">
+      <h1>Choose a new password</h1>
+      <Card title="You signed in with a temporary password">
+        <form onSubmit={submit}>
+          <label>New password (12+ characters)<input type="password" autoComplete="new-password" required value={a} onInput={(e) => setA(e.currentTarget.value)} autoFocus /></label>
+          <label>Repeat<input type="password" autoComplete="new-password" required value={b} onInput={(e) => setB(e.currentTarget.value)} /></label>
+          <button disabled={busy || weak}>Save password</button>
+        </form>
+        <ErrorBox error={err} />
+      </Card>
+      <button class="ghost" onClick={() => setSession(null)}>Sign out</button>
     </main>
   )
 }
@@ -184,6 +230,7 @@ function Created({ link }: { link: Link }) {
           <div class="row">
             <button onClick={() => navigator.clipboard.writeText(link.short_url)}>Copy</button>
             <button class="ghost" onClick={() => go(`link/${link.namespace}/${link.code}`)}>Details</button>
+            <button class="ghost" onClick={() => go(`qr/${link.namespace}/${link.code}`)}>Style QR</button>
             <button class="ghost" onClick={() => location.reload()}>Another</button>
           </div>
         </div>
@@ -194,7 +241,7 @@ function Created({ link }: { link: Link }) {
 }
 
 // ───────────── Link detail ─────────────
-type Daily = { day: string; outcome: string; clicks: number; uniques: number; bots: number; by_country: Record<string, number>; by_city: Record<string, number>; by_device: Record<string, number>; by_os: Record<string, number> }
+type Daily = { day: string; outcome: string; clicks: number; uniques: number; bots: number; by_country: Record<string, number>; by_city: Record<string, number>; by_device: Record<string, number>; by_os: Record<string, number>; by_browser?: Record<string, number>; by_referer?: Record<string, number> }
 type Live = { bucket: string; outcome: string; clicks: number; uniques: number; bots: number }
 type Audit = { ts: string; actor: string; action: string }
 
@@ -217,7 +264,7 @@ export function LinkDetail({ ns, code }: { ns: string; code: string }) {
   }
 
   const byDay = new Map<string, { value: number; sub: number; bots: number }>()
-  const agg = { country: {} as Record<string, number>, city: {} as Record<string, number>, device: {} as Record<string, number>, os: {} as Record<string, number> }
+  const agg = { country: {} as Record<string, number>, city: {} as Record<string, number>, device: {} as Record<string, number>, os: {} as Record<string, number>, browser: {} as Record<string, number>, referer: {} as Record<string, number> }
   let total = 0, uniques = 0, bots = 0
   for (const d of stats.data?.daily ?? []) {
     if (d.outcome !== 'redirect') continue
@@ -226,7 +273,7 @@ export function LinkDetail({ ns, code }: { ns: string; code: string }) {
     e.sub += d.uniques
     e.bots += d.bots
     byDay.set(d.day, e)
-    for (const [k, src] of [['country', d.by_country], ['city', d.by_city], ['device', d.by_device], ['os', d.by_os]] as const)
+    for (const [k, src] of [['country', d.by_country], ['city', d.by_city], ['device', d.by_device], ['os', d.by_os], ['browser', d.by_browser ?? {}], ['referer', d.by_referer ?? {}]] as const)
       for (const [kk, n] of Object.entries(src)) agg[k][kk] = (agg[k][kk] ?? 0) + n
   }
   for (const l of stats.data?.live ?? []) {
@@ -251,6 +298,7 @@ export function LinkDetail({ ns, code }: { ns: string; code: string }) {
           actions={
             <>
               <Status s={l.status} />
+              <button class="ghost" onClick={() => go(`qr/${l.namespace}/${l.code}`)}>QR</button>
               {l.status === 'active' && <button class="ghost" onClick={() => act({ status: 'paused' })}>Pause</button>}
               {l.status === 'paused' && <button class="ghost" onClick={() => act({ status: 'active' })}>Resume</button>}
               {l.status !== 'archived' && (
@@ -296,6 +344,8 @@ export function LinkDetail({ ns, code }: { ns: string; code: string }) {
           <Top title="Cities" counts={agg.city} />
           <Top title="Devices" counts={agg.device} />
           <Top title="OS" counts={agg.os} />
+          <Top title="Browsers" counts={agg.browser} />
+          <Top title="Referrers" counts={agg.referer} />
         </div>
         <p class="muted small">Breakdowns cover rolled-up days (until yesterday) and count humans only.</p>
       </Card>

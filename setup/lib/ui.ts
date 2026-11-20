@@ -13,7 +13,24 @@ export function must<T>(v: T): Exclude<T, symbol> {
   return v as Exclude<T, symbol>
 }
 
-export async function ask(message: string, opts: { initial?: string; placeholder?: string; validate?: (v: string) => string | undefined } = {}) {
+/** SHORTENER_NONINTERACTIVE=1 (or no TTY): answer from env/initial values; fail instead of prompting. */
+export const NONINTERACTIVE = process.env.SHORTENER_NONINTERACTIVE === '1' || !process.stdin.isTTY
+
+function fromEnv(env?: string): string | undefined {
+  return env ? process.env[env] : undefined
+}
+
+export async function ask(
+  message: string,
+  opts: { initial?: string; placeholder?: string; validate?: (v: string) => string | undefined; env?: string; optional?: boolean } = {},
+) {
+  const v = fromEnv(opts.env) ?? (NONINTERACTIVE ? opts.initial ?? (opts.optional ? '' : undefined) : undefined)
+  if (v !== undefined) {
+    const bad = opts.validate?.(v)
+    if (bad && !(opts.optional && v === '')) throw new Error(`${message}: ${bad}${opts.env ? ` (from $${opts.env})` : ''}`)
+    return v.trim()
+  }
+  if (NONINTERACTIVE) throw new Error(`${message}: no value${opts.env ? ` — set $${opts.env}` : ''}`)
   return must(
     await p.text({
       message,
@@ -29,14 +46,31 @@ export async function secret(message: string, env?: string): Promise<string> {
     p.log.info(`${message}: using $${env}`)
     return process.env[env]!
   }
+  if (NONINTERACTIVE) throw new Error(`${message}: set $${env ?? '(no env var)'}`)
   return must(await p.password({ message, validate: (v) => (v ? undefined : 'Required') })).trim()
 }
 
-export async function choose<T extends string>(message: string, options: { value: T; label: string; hint?: string }[], initial?: T): Promise<T> {
+export async function choose<T extends string>(
+  message: string,
+  options: { value: T; label: string; hint?: string }[],
+  initial?: T,
+  env?: string,
+): Promise<T> {
+  const v = fromEnv(env)
+  if (v !== undefined) {
+    if (!options.some((o) => o.value === v)) throw new Error(`${message}: $${env}=${v} is not one of ${options.map((o) => o.value).join(', ')}`)
+    return v as T
+  }
+  if (NONINTERACTIVE) {
+    if (initial !== undefined) return initial
+    if (options.length === 1) return options[0]!.value
+    throw new Error(`${message}: no default${env ? ` — set $${env}` : ''}`)
+  }
   return must(await p.select({ message, options: options as never, initialValue: initial })) as T
 }
 
 export async function yes(message: string, initial = true): Promise<boolean> {
+  if (NONINTERACTIVE) return initial
   return must(await p.confirm({ message, initialValue: initial }))
 }
 

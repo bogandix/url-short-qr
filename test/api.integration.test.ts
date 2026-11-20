@@ -7,6 +7,21 @@ import { join } from 'node:path'
 import { PGlite } from '@electric-sql/pglite'
 import { PGLiteSocketServer } from '@electric-sql/pglite-socket'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+
+// PGlite's socket server takes one connection at a time; production opens a short-lived
+// client per request (Hyperdrive pools). Share one real client here and make end() a no-op.
+vi.mock('postgres', async () => {
+  const real = (await vi.importActual<typeof import('postgres')>('postgres')).default
+  let shared: ReturnType<typeof real> | null = null
+  const make = (url: string, opts: Parameters<typeof real>[1]) => {
+    shared ??= real(url, { ...opts, max: 1, idle_timeout: 0 })
+    return new Proxy(shared, {
+      get: (t, k) => (k === 'end' ? async () => {} : Reflect.get(t, k)),
+      apply: (t, self, args) => Reflect.apply(t as never, self, args),
+    })
+  }
+  return { default: make }
+})
 import { api } from '../apps/edge/src/api/index.js'
 import { clearAuthCaches, sha256Hex } from '../apps/edge/src/lib/auth.js'
 import { reconcileDay, syncKv, dailyJob } from '../apps/edge/src/lib/cron.js'
@@ -267,6 +282,51 @@ describe('router → Postgres, stats, crons', () => {
     expect(JSON.parse(kv.map.get('short.example/STAT1')!).t).toBe('https://t.example/')
     expect(JSON.parse(kv.map.get('__domains_all')!)).toHaveLength(2)
     expect(kv.map.has('__domain/tenant.example')).toBe(true)
+  })
+})
+
+describe('integration API (vrumvrum)', () => {
+  it('external_id makes create idempotent per owner; lookup by external id', async () => {
+    const body = { namespace: 'short.example', target_url: 'https://vrumvrum.example/anunt/1', owner: 'vrumvrum:garage:7', external_id: 'listing-1', metadata: { listing: 1 } }
+    const a = await call<{ code: string; existed?: boolean; metadata: Record<string, unknown> }>('POST', '/links', body)
+    expect(a.status).toBe(201)
+    expect(a.body.metadata).toEqual({ listing: 1 })
+    const b = await call<{ code: string; existed?: boolean }>('POST', '/links', { ...body, target_url: 'https://other.example/' })
+    expect(b.status).toBe(200)
+    expect(b.body).toMatchObject({ code: a.body.code, existed: true })
+    const other = await call('POST', '/links', { ...body, owner: 'vrumvrum:garage:8' })
+    expect(other.status).toBe(201) // same external id, different owner
+    const found = await call<{ code: string }>('GET', '/links/by-external/listing-1?owner=vrumvrum:garage:7')
+    expect(found.body.code).toBe(a.body.code)
+    expect((await call('GET', '/links/by-external/nope?owner=vrumvrum:garage:7')).status).toBe(404)
+    const listed = await call<{ items: unknown[] }>('GET', '/links?external_id=listing-1')
+    expect(listed.body.items).toHaveLength(2)
+    const patched = await call<{ metadata: Record<string, unknown> }>('PATCH', `/links/short.example/${a.body.code}`, { metadata: { listing: 1, sold: true } })
+    expect(patched.body.metadata).toEqual({ listing: 1, sold: true })
+  })
+
+  it('overview returns series, totals, top links and breakdowns', async () => {
+    const r = await call<{
+      totals: { clicks: number; requests: number }
+      series: { day: string }[]
+      top: { code: string; clicks: number }[]
+      breakdowns: Record<string, { key: string; n: number }[]>
+      outcomes: { outcome: string; n: number }[]
+    }>('GET', '/stats/overview?namespace=short.example')
+    expect(r.status).toBe(200)
+    expect(r.body.totals.requests).toBeGreaterThan(0)
+    expect(r.body.top[0]!.code).toBe('STAT1')
+    expect(r.body.breakdowns.device!.map((x) => x.key)).toContain('mobile')
+    expect(r.body.breakdowns.referer!.map((x) => x.key)).toContain('direct')
+    expect(r.body.outcomes.map((x) => x.outcome)).toContain('redirect')
+    expect((await call('GET', '/stats/overview?from=2026-02-01&to=2026-01-01')).status).toBe(400)
+  })
+
+  it('openapi document is public', async () => {
+    const r = await api.fetch(new Request('https://short.example/_/api/openapi.json'), env, ctx)
+    const j = (await r.json()) as { openapi: string; paths: Record<string, unknown> }
+    expect(j.openapi).toBe('3.1.0')
+    expect(j.paths).toHaveProperty('/links/by-external/{external_id}')
   })
 })
 

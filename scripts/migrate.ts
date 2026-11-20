@@ -25,7 +25,9 @@ async function main() {
       if (!r.ok) throw new Error(`supabase query: ${r.status} ${(await r.text()).slice(0, 400)}`)
     }
   } else {
-    throw new Error('Set SHORTENER_DATABASE_URL, or SUPABASE_ACCESS_TOKEN and SUPABASE_PROJECT_REF')
+    // Cloudflare Workers Builds without database secrets: deploy still proceeds.
+    console.log('migrate: skipped (set SHORTENER_DATABASE_URL, or SUPABASE_ACCESS_TOKEN + SUPABASE_PROJECT_REF)')
+    return
   }
   try {
     const ran = await runMigrations(run, (m) => console.log(m))

@@ -19,7 +19,7 @@ export interface Database {
   /** Admin UI login: JWKS URL + issuer/audience (Supabase Auth). */
   jwks?(): Promise<{ jwksUrl: string; issuer: string; audience: string; supabaseUrl?: string; anonKey?: string }>
   /** Create/ensure a login user for an admin email (Supabase Auth). */
-  ensureAuthUser?(email: string): Promise<void>
+  ensureAuthUser?(email: string, tempPassword?: string): Promise<void>
   storageQuotaBytes?: number
   /** Saved into state (non-secret identifiers). */
   stateInfo(): Record<string, string | undefined>

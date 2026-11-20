@@ -2,7 +2,7 @@ import type { ComponentChildren } from 'preact'
 import { useEffect, useState } from 'preact/hooks'
 
 export function useRoute(): string[] {
-  const read = () => (location.hash.replace(/^#\/?/, '') || 'links').split('/').map(decodeURIComponent)
+  const read = () => (location.hash.replace(/^#\/?/, '') || 'dashboard').split('/').map(decodeURIComponent)
   const [r, setR] = useState(read)
   useEffect(() => {
     const f = () => setR(read())

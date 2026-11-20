@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { ROOT, type State } from './state.js'
 
@@ -11,7 +12,9 @@ export type WranglerAuth = { token: string; accountId: string }
 /** Run wrangler with the token in env (never on the command line). Output is redacted. */
 export function wrangler(args: string[], auth: WranglerAuth, opts: { stdin?: string; quiet?: boolean } = {}): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn('npx', ['--no-install', 'wrangler', ...args], {
+    // Same Node binary as the wizard (wrangler needs >= 22.12), wrangler from this repo's node_modules.
+    const bin = createRequire(join(ROOT, 'package.json')).resolve('wrangler/bin/wrangler.js')
+    const child = spawn(process.execPath, [bin, ...args], {
       cwd: ROOT,
       env: { ...process.env, CLOUDFLARE_API_TOKEN: auth.token, CLOUDFLARE_ACCOUNT_ID: auth.accountId, WRANGLER_SEND_METRICS: 'false' },
       stdio: ['pipe', 'pipe', 'pipe'],

@@ -1,8 +1,8 @@
 /** Session token: a Supabase access token (JWT) or an API key pasted at login. */
 const KEY = 'shortener.session'
 
-export type Session = { token: string; refresh?: string; exp?: number; email?: string; kind: 'jwt' | 'key' }
-export type AuthConfig = { provider: 'supabase'; url: string; anon_key: string } | { provider: 'api_key' }
+export type Session = { token: string; refresh?: string; exp?: number; email?: string; kind: 'jwt' | 'key'; mustChange?: boolean }
+export type AuthConfig = { provider: 'supabase'; url: string; anon_key: string; password?: boolean } | { provider: 'api_key' }
 
 function read(): Session | null {
   try {
@@ -42,11 +42,11 @@ export async function authConfig(): Promise<AuthConfig> {
   return config
 }
 
-async function supabase(path: string, body: unknown) {
+async function supabase(path: string, body: unknown, opts: { method?: string; token?: string } = {}) {
   const cfg = (await authConfig()) as Extract<AuthConfig, { provider: 'supabase' }>
   const r = await fetch(`${cfg.url}/auth/v1/${path}`, {
-    method: 'POST',
-    headers: { apikey: cfg.anon_key, 'content-type': 'application/json' },
+    method: opts.method ?? 'POST',
+    headers: { apikey: cfg.anon_key, 'content-type': 'application/json', ...(opts.token ? { authorization: `Bearer ${opts.token}` } : {}) },
     body: JSON.stringify(body),
   })
   const j = await r.json().catch(() => ({}))
@@ -58,9 +58,33 @@ export async function sendOtp(email: string) {
   await supabase('otp', { email, create_user: false })
 }
 
+type TokenResponse = { access_token: string; refresh_token: string; expires_in: number; user?: { email?: string; user_metadata?: { must_change_password?: boolean } } }
+
+function sessionFrom(j: TokenResponse, email: string): Session {
+  return {
+    kind: 'jwt',
+    token: j.access_token,
+    refresh: j.refresh_token,
+    exp: Date.now() + j.expires_in * 1000,
+    email: j.user?.email ?? email,
+    mustChange: !!j.user?.user_metadata?.must_change_password,
+  }
+}
+
 export async function verifyOtp(email: string, token: string) {
-  const j = await supabase('verify', { type: 'email', email, token })
-  setSession({ kind: 'jwt', token: j.access_token, refresh: j.refresh_token, exp: Date.now() + j.expires_in * 1000, email })
+  setSession(sessionFrom(await supabase('verify', { type: 'email', email, token }), email))
+}
+
+export async function passwordLogin(email: string, password: string) {
+  setSession(sessionFrom(await supabase('token?grant_type=password', { email, password }), email))
+}
+
+/** Sets a new password and clears the temporary-password flag. */
+export async function changePassword(password: string) {
+  const s = session
+  if (!s || s.kind !== 'jwt') throw new Error('not signed in')
+  await supabase('user', { password, data: { must_change_password: false } }, { method: 'PUT', token: s.token })
+  setSession({ ...s, mustChange: false })
 }
 
 async function freshToken(): Promise<string | null> {

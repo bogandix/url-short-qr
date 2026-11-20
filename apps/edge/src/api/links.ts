@@ -31,6 +31,9 @@ const LinkInput = z.object({
   append_utm: z.boolean().optional(),
   expires_at: z.string().datetime({ offset: true }).optional(),
   fallback_url: httpUrl.optional(),
+  /** Caller's own id (e.g. a vrumvrum listing id). Unique per owner: re-POSTing returns the existing link. */
+  external_id: z.string().min(1).max(200).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
 })
 type LinkInput = z.infer<typeof LinkInput>
 
@@ -45,6 +48,7 @@ const LinkPatch = z
     status: z.enum(['active', 'paused']),
     expires_at: z.string().datetime({ offset: true }).nullable(),
     fallback_url: httpUrl.nullable(),
+    metadata: z.record(z.string(), z.unknown()),
   })
   .partial()
   .strict()
@@ -63,6 +67,8 @@ type LinkRow = {
   expires_at: Date | null
   fallback_url: string | null
   version: number
+  external_id: string | null
+  metadata: Record<string, unknown>
   created_by: string | null
   created_at: Date
   updated_at: Date
@@ -101,10 +107,17 @@ function present(row: LinkRow) {
   }
 }
 
-async function createOne(sql: Sql, c: Ctx, input: LinkInput, domains: DomainRow[]): Promise<LinkRow> {
+async function createOne(sql: Sql, c: Ctx, input: LinkInput, domains: DomainRow[]): Promise<LinkRow & { existed?: boolean }> {
   const auth = c.get('auth')
   const domain = domainFor(input.namespace, domains)
   if (!canAccess(auth, input.namespace, input.owner)) throw new ApiError(403, 'namespace_or_owner_not_allowed')
+
+  if (input.external_id) {
+    const prior = await sql<LinkRow[]>`
+      select * from shortener.links
+      where coalesce(owner, '') = ${input.owner ?? ''} and external_id = ${input.external_id} limit 1`
+    if (prior[0]) return { ...prior[0], existed: true }
+  }
 
   let code: string | null = null
   if (input.code) {
@@ -113,10 +126,12 @@ async function createOne(sql: Sql, c: Ctx, input: LinkInput, domains: DomainRow[
   }
 
   const insert = (cd: string) => sql<LinkRow[]>`
-    insert into shortener.links (namespace, code, target_url, title, tags, owner, utm, append_utm, expires_at, fallback_url, created_by)
+    insert into shortener.links (namespace, code, target_url, title, tags, owner, utm, append_utm, expires_at, fallback_url,
+                                 external_id, metadata, created_by)
     values (${input.namespace}, ${cd}, ${input.target_url}, ${input.title ?? null}, ${pgArray(input.tags ?? [])}::text[],
             ${input.owner ?? null}, ${JSON.stringify(input.utm ?? {})}::jsonb, ${input.append_utm ?? false},
-            ${input.expires_at ?? null}::timestamptz, ${input.fallback_url ?? null}, ${auth.actor})
+            ${input.expires_at ?? null}::timestamptz, ${input.fallback_url ?? null},
+            ${input.external_id ?? null}, ${JSON.stringify(input.metadata ?? {})}::jsonb, ${auth.actor})
     on conflict (namespace, code) do nothing
     returning *`
 
@@ -160,12 +175,14 @@ linksApi.post('/', scope('links:write'), async (c) => {
       (sql) =>
         sql.begin(async (tx) => {
           const r = await createOne(tx as unknown as Sql, c, input, domains)
-          await audit(tx as unknown as Sql, c.get('auth').actor, 'link.create', r, null, r)
+          if (!r.existed) await audit(tx as unknown as Sql, c.get('auth').actor, 'link.create', r, null, r)
           return r
         }),
     )
-    await writeKv(c, [row]) // database first, then KV
-    return c.json(present(row), 201)
+    const { existed, ...link } = row
+    if (existed) return c.json({ ...present(link), existed: true }, 200)
+    await writeKv(c, [link]) // database first, then KV
+    return c.json(present(link), 201)
   } catch (err) {
     return fail(c, err)
   }
@@ -184,7 +201,7 @@ linksApi.post('/bulk', scope('links:write'), async (c) => {
           for (const [i, item] of body.items.entries()) {
             try {
               const r = await createOne(tx as unknown as Sql, c, item, domains)
-              await audit(tx as unknown as Sql, c.get('auth').actor, 'link.create', r, null, r)
+              if (!r.existed) await audit(tx as unknown as Sql, c.get('auth').actor, 'link.create', r, null, r)
               out.push(r)
             } catch (err) {
               if (err instanceof ApiError) throw new ApiError(err.status, err.code, { index: i, detail: err.detail })
@@ -222,6 +239,7 @@ linksApi.get('/', scope('links:read'), async (c) => {
       where (${q.namespace ?? null}::text is null or namespace = ${q.namespace ?? null})
         and (${q.owner ?? null}::text is null or owner = ${q.owner ?? null})
         and (${q.tag ?? null}::text is null or ${q.tag ?? null} = any(tags))
+        and (${q.external_id ?? null}::text is null or external_id = ${q.external_id ?? null})
         and (${q.status ?? null}::text is null and status <> 'archived' or status = ${q.status ?? null})
         and (${q.q ?? null}::text is null or code ilike '%' || ${q.q ?? null} || '%'
              or title ilike '%' || ${q.q ?? null} || '%' or target_url ilike '%' || ${q.q ?? null} || '%')
@@ -246,6 +264,21 @@ async function getLink(c: Ctx, sql: Sql): Promise<LinkRow> {
   if (!row || !canAccess(c.get('auth'), row.namespace, row.owner)) throw new ApiError(404, 'not_found')
   return row
 }
+
+// GET /links/by-external/:external_id?owner= — the integration lookup (owner defaults to none).
+linksApi.get('/by-external/:external_id', scope('links:read'), async (c) => {
+  const auth = c.get('auth')
+  const owner = c.req.query('owner') ?? null
+  const rows = await withSql(
+    () => adminSqlClient(c.env),
+    (sql) => sql<LinkRow[]>`
+      select * from shortener.links
+      where external_id = ${c.req.param('external_id')} and coalesce(owner, '') = ${owner ?? ''} limit 1`,
+  )
+  const row = rows[0]
+  if (!row || !canAccess(auth, row.namespace, row.owner)) return c.json({ error: 'not_found' }, 404)
+  return c.json(present(row))
+})
 
 linksApi.get('/:namespace/:code', scope('links:read'), async (c) => {
   try {
@@ -291,6 +324,7 @@ linksApi.patch('/:namespace/:code', scope('links:write'), async (c) => {
               status       = case when ${set('status')} then ${patch.status ?? 'active'} else status end,
               expires_at   = case when ${set('expires_at')} then ${patch.expires_at ?? null}::timestamptz else expires_at end,
               fallback_url = case when ${set('fallback_url')} then ${patch.fallback_url ?? null} else fallback_url end,
+              metadata     = case when ${set('metadata')} then ${JSON.stringify(patch.metadata ?? {})}::jsonb else metadata end,
               version = version + 1, updated_at = now()
             where id = ${before.id}::uuid
             returning *`
@@ -343,7 +377,7 @@ linksApi.get('/:namespace/:code/stats', scope('stats:read'), async (c) => {
       async (sql) => {
         const link = await getLink(c, sql)
         const daily = await sql`
-          select day::text, outcome, clicks, uniques, bots, by_country, by_city, by_device, by_os
+          select day::text, outcome, clicks, uniques, bots, by_country, by_city, by_device, by_os, by_browser, by_referer
           from shortener.clicks_daily
           where namespace = ${link.namespace} and code = ${link.code}
             and day >= ${from}::date and day <= ${to}::date

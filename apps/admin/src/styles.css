@@ -68,3 +68,14 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1
 .toprow span { position: relative; z-index: 1; }
 .audit { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; font-size: 14px; }
 .login { max-width: 420px; }
+.qrgen { display: grid; gap: 16px; }
+.picklist { list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 6px; max-height: 280px; overflow-y: auto; }
+.picklist li { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: center; min-width: 0; }
+.picklist .trunc { max-width: 100%; }
+input[type="color"] { height: 36px; padding: 2px; }
+.grid { display: grid; gap: 10px; align-content: start; min-width: 0; }
+.check { display: inline-flex; flex-direction: row; gap: 6px; align-items: center; color: var(--text); }
+.check input { width: auto; }
+fieldset { border: 0; padding: 0; margin: 0; }
+.secret { margin-top: 12px; padding: 12px; border: 1px dashed var(--warn); border-radius: 6px; display: grid; gap: 8px; }
+.secret code { word-break: break-all; }

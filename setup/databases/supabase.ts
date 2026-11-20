@@ -53,10 +53,11 @@ export class Supabase implements Database {
           ...projects.map((x) => ({ value: x.id, label: `${x.name} (${x.id}, ${x.region})` })),
         ],
         '__new',
+        'SUPABASE_PROJECT_REF',
       )
       if (pick === '__new') {
         const orgs = await this.call<{ id: string; name: string }[]>('GET', '/organizations')
-        const org = orgs.length === 1 ? orgs[0]!.id : await choose('Organization', orgs.map((o) => ({ value: o.id, label: o.name })))
+        const org = orgs.length === 1 ? orgs[0]!.id : await choose('Organization', orgs.map((o) => ({ value: o.id, label: o.name })), undefined, 'SUPABASE_ORG_ID')
         const created = await this.call<{ id: string }>('POST', '/projects', {
           name: 'shortener',
           organization_id: org,
@@ -132,14 +133,26 @@ export class Supabase implements Database {
     }
   }
 
-  async ensureAuthUser(email: string) {
+  /** Creates the login user (or resets an existing one) with a temporary password it must change. */
+  async ensureAuthUser(email: string, tempPassword?: string) {
     const { service } = await this.apiKeys()
-    const r = await fetch(`https://${this.ref}.supabase.co/auth/v1/admin/users`, {
-      method: 'POST',
-      headers: { apikey: service, authorization: `Bearer ${service}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ email, email_confirm: true }),
-    })
-    if (!r.ok && r.status !== 422) throw new Error(`create auth user: ${r.status} ${(await r.text()).slice(0, 200)}`)
+    const base = `https://${this.ref}.supabase.co/auth/v1/admin/users`
+    const headers = { apikey: service, authorization: `Bearer ${service}`, 'content-type': 'application/json' }
+    const body = {
+      email,
+      email_confirm: true,
+      ...(tempPassword ? { password: tempPassword, user_metadata: { must_change_password: true } } : {}),
+    }
+    const r = await fetch(base, { method: 'POST', headers, body: JSON.stringify(body) })
+    if (r.ok) return
+    if (r.status !== 422) throw new Error(`create auth user: ${r.status} ${(await r.text()).slice(0, 200)}`)
+    if (!tempPassword) return
+    // Already exists: find it and set the temporary password.
+    const list = (await (await fetch(`${base}?per_page=1000`, { headers })).json()) as { users: { id: string; email: string }[] }
+    const u = list.users.find((x) => x.email?.toLowerCase() === email.toLowerCase())
+    if (!u) throw new Error('auth user exists but was not found')
+    const up = await fetch(`${base}/${u.id}`, { method: 'PUT', headers, body: JSON.stringify(body) })
+    if (!up.ok) throw new Error(`update auth user: ${up.status}`)
   }
 
   stateInfo() {

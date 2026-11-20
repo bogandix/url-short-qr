@@ -13,6 +13,8 @@ function client(connectionString: string): Sql {
     // fetch_types is off, so array OIDs are unknown to postgres.js: parse text[] (1009) and varchar[] (1015) here.
     types: {
       textArray: { to: 1009, from: [1009, 1015], serialize: (v: string[] | string) => (Array.isArray(v) ? pgArray(v)! : v), parse: parsePgArray },
+      // json/jsonb arrive as text without type info; params are already JSON strings (cast ::jsonb in SQL).
+      json: { to: 3802, from: [114, 3802], serialize: (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v)), parse: (t: string) => JSON.parse(t) },
     },
   }) as unknown as Sql
 }
